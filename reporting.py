@@ -120,7 +120,7 @@ def report(r: SimResult) -> None:
           f"(model-FLOPs) / {r.mfu_hw*100:.1f}% (hardware)")
     print(f"  T_STEP = {fmt(r.t_step,'s')}   staleness = {r.staleness} step(s)")
     print(f"  N_STEPS = {r.n_steps}   ->   T_TOTAL = {fmt(r.t_total,'s')}")
-    print(f"  ratio inference:training  --  true FLOPs {r.flop_ratio_inf_train:.2f}x  |"
+    print(f"  ratio inference:training  --  true FLOPs {r.flop_ratio:.2f}x  |"
           f"  GPU-time {r.gputime_ratio:.2f}x")
 
     if s.published:
@@ -141,4 +141,4 @@ def sweep_response_len(s: Scenario, lengths: List[float]) -> None:
         r = simulate(with_response_len(s, R))
         print(f"  {R:>9,.0f} {fmt(r.t_step,'s'):>14} {r.bottleneck:>16} "
               f"{r.ro.seq_par:>8} {r.tc.attn_frac*100:>6.1f}% "
-              f"{r.flop_ratio_inf_train:>8.2f}x")
+              f"{r.flop_ratio:>8.2f}x")
