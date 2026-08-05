@@ -46,8 +46,11 @@ class RolloutTerms:
     kv_tok: float
     mem_weights_inf: float
     kv_peak: float
+    kv_expected: float
     seq_par: int
+    seqs_per_wave: float
     model_fits: bool
+    seq_fits: bool
     c_prefill: float
     c_decode: float
     c_dec_attn: float
@@ -59,7 +62,7 @@ class RolloutTerms:
     t_prefill: float
     t_env: float
     oversample_ratio: float
-    n_micro: float
+    n_waves: float
     t_rollout: float
     c_rollout_total: float
     decode_bound: str
@@ -157,7 +160,7 @@ def training_memory(s: Scenario) -> TrainingMemory:
     grads = a.b_grads * params / hw.n_shard
     opt_states = a.b_optimiser * params / hw.n_shard
 
-    recomp_coef = 20 if a.recomp_act == 0 else 1
+    recomp_coef = 1 if a.recomp_act == 1 else 20
 
     # Activation memory is set by the gradient-accumulation micro-batch resident on one
     # GPU, not by the whole rollout batch.
@@ -178,8 +181,10 @@ def training_memory(s: Scenario) -> TrainingMemory:
 
 def rollout_terms(s: Scenario) -> RolloutTerms:
     m, rl, a, hw, v = s.model, s.rl, s.algo, s.inf_hw, s.verify
+    # Calculate memory requirements for model
     mem_weights_inf = a.b_weights_inf * m.p_total
     free_mem = hw.node_hbm - mem_weights_inf
+    model_fits = free_mem > 0 # If model doesn't fit, some form of sharding needs to be employed during inference
 
     # Effective FLOPs and bandwidth once hardware utilisation is taken into account
     bw_eff = hw.bw * hw.bw_eff
@@ -189,12 +194,16 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     kv_per_tok = a.b_kv * 2.0 * m.n_layers * m.n_kv_heads * m.head_dim
     vol_kv = kv_per_tok * (rl.prompt_len * rl.response_len_mean + rl.er2 / 2.0)
 
-    # Concurrent sequences per node. Calculated using the number of full KV caches that can fit in memory
-    # Conservative estimate since under continuous batching, seuqences will be below max contexxt.
+    # Calculates the number of concurrent sequences per node under continuous batching.
+    # This is based on either:
+    #   "peak"     -- KV cache allocated for a max-context sequence (giving a conservative lower bound on concurrency)
+    #   "expected" -- KV cache allocated for the mean in-flight footprint P + E[R]/2 (optimistic scheduling).
     max_ctx = rl.max_response_len or rl.context_len
     kv_peak = kv_per_tok * max_ctx
-    model_fits = free_mem > 0
-    seq_par = math.floor(free_mem / kv_peak) if model_fits and kv_peak > 0 else 0
+    kv_expected = kv_per_tok * (rl.prompt_len + rl.response_len_mean / 2.0)
+    kv_provision = kv_peak if a.kv_provisioning == "peak" else kv_expected
+    seq_fits = free_mem >= kv_peak          # A max-length sequence must still fit in memory
+    seq_par = math.floor(free_mem / kv_provision) if model_fits and kv_provision > 0 else 0
 
     # Compute for prefill per response (Divided by the group if it's prefix-cached)
     c_pre_layers = 2.0 * m.p_active_layers * rl.prompt_len
@@ -221,21 +230,24 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     c_decode = c_dec_layers + c_dec_attn
 
 
-    # Time calculations
-    t_dec_comp = (c_decode * seq_par) / (flops_eff * hw.mfu) if seq_par else float("inf")
+    # A "wave" is a continuously-batched set of sequences with rollouts generation.
+    # To distribute the workload evenly across waves, we calculate the average sequences per wave
+    n_waves = math.ceil(rl.size_batch / max(seq_par * hw.n_nodes, 1)) if seq_par else float("inf")
+    seqs_per_wave = rl.size_batch / (hw.n_nodes * n_waves) if seq_par else float("inf")
+
+    # Time calculations (per wave)
+    t_dec_comp = (c_decode * seqs_per_wave) / flops_eff if seq_par else float("inf")
     t_dec_mem = (mem_weights_inf * rl.response_len_mean) / bw_eff if bw_eff else float("inf")
     t_decode = max(t_dec_comp, t_dec_mem) # Overall decode step time
 
-    t_inf_attn = (vol_kv * seq_par) / bw_eff if bw_eff else float("inf")
-    t_prefill = (c_prefill * seq_par) / flops_eff if seq_par else float("inf")
+    t_inf_attn = (vol_kv * seqs_per_wave) / bw_eff if bw_eff else float("inf")
+    t_prefill = (c_prefill * seqs_per_wave) / flops_eff if seq_par else float("inf")
     t_env = v.t_env_per_rollout
 
     oversample_ratio = rl.oversample_ratio()
-    # Number of microbatches needs for inference given the parallel sequence generations
-    n_micro = math.ceil(rl.size_batch / max(seq_par * hw.n_nodes, 1)) if seq_par else float("inf")
 
     # Overall step time
-    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_micro * oversample_ratio
+    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves * oversample_ratio
 
     # Total rollout FLOPs executed (to calculate compute-ratios)
     if rl.prefix_caching:
@@ -244,11 +256,12 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
         c_rollout_total = (c_prefill * rl.responses_per_prompt + c_decode) * rl.size_batch * oversample_ratio
 
     return RolloutTerms(
-        kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, kv_peak=kv_peak, seq_par=seq_par,
-        model_fits=model_fits, c_prefill=c_prefill, c_decode=c_decode,
+        kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, kv_peak=kv_peak, kv_expected=kv_expected,
+        seq_par=seq_par, seqs_per_wave=seqs_per_wave, model_fits=model_fits, seq_fits=seq_fits,
+        c_prefill=c_prefill, c_decode=c_decode,
         c_dec_attn=c_dec_attn, vol_kv=vol_kv, t_dec_comp=t_dec_comp,
         t_dec_mem=t_dec_mem, t_decode=t_decode, t_inf_attn=t_inf_attn,
-        t_prefill=t_prefill, t_env=t_env, oversample_ratio=oversample_ratio, n_micro=n_micro,
+        t_prefill=t_prefill, t_env=t_env, oversample_ratio=oversample_ratio, n_waves=n_waves,
         t_rollout=t_rollout, c_rollout_total=c_rollout_total,
         decode_bound="memory" if t_dec_mem >= t_dec_comp else "compute")
 

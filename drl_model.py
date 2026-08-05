@@ -35,7 +35,8 @@ Module layout
 import argparse
 from typing import Optional, Tuple
 
-from presets import intellect2, intellect3, primerl_paper, primerl_deepdive
+from presets import (intellect2, intellect3, primerl_paper, primerl_deepdive,
+                     areal_1_5b, areal_7b, areal_14b, areal_32b)
 from model import SimResult, Scenario, simulate, with_response_len, with_capacity_mult
 from solvers import solve_for_capacity, solve_for_response_len
 from reporting import fmt, report, sweep_response_len
@@ -64,7 +65,8 @@ def main() -> None:
     args = ap.parse_args()
 
     scenarios = [intellect2("short"), intellect2("long"), intellect3(),
-                 primerl_paper(), primerl_deepdive()]
+                 primerl_paper(), primerl_deepdive(),
+                 areal_1_5b(), areal_7b(), areal_14b(), areal_32b()]
     for s in scenarios:
         report(simulate(s))
 
@@ -117,6 +119,23 @@ def main() -> None:
     if mult3:
         print(f"    (alternative: holding E[R]=32k, an inference capacity multiplier of "
               f"{mult3:.2f} also lands on 1500 s)")
+
+    print("\n" + "=" * 78)
+    print("  AReaL (arXiv 2505.24298): disaggregated async, 4-point scale check")
+    print("=" * 78)
+    print("  E[R] not published -> validate via the E[R] that reproduces the published step.")
+    print(f"  {'run':<24}{'model t_step':>16}{'published':>14}{'err':>7}{'inv E[R]':>11}")
+    for make in (areal_1_5b, areal_7b, areal_14b, areal_32b):
+        sc = make()
+        r = simulate(sc)
+        R = solve_for_response_len(sc, sc.published["t_step"])
+        err = (r.t_step - sc.published["t_step"]) / sc.published["t_step"] * 100
+        tag = sc.name.replace("AReaL ", "").split("(")[0].strip()
+        cap = sc.rl.max_response_len
+        rstr = f"{R:,.0f}" + ("" if (R and R < cap) else "!") if R else "n/a"
+        print(f"  {tag:<24}{fmt(r.t_step,'s'):>16}{fmt(sc.published['t_step'],'s'):>14}"
+              f"{err:>+6.0f}%{rstr:>11}")
+    print("  (inv E[R] under the 32,768-cap = plausible; '!' = above cap)")
 
     if args.sweep:
         print("\n" + "=" * 78)

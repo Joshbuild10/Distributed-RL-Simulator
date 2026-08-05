@@ -108,7 +108,7 @@ class AlgoSpec:
     tput_mult_inf: float = 1.0
     
     # recomputation
-    recomp_act: int = 0                 # 1 = No activation checkpointing
+    recomp_act: int = 0                 # 1 = Full activation checkpointing
     recomp_old: int = 0                 # 1 = Recomputation of old-policy logprobs on the trainer
     
     # loop structure
@@ -119,6 +119,9 @@ class AlgoSpec:
     in_flight_updates: bool = True      # broadcast overlapped with generation
     include_attention: bool = True      # Add the compute for dot-product attention terms
     causal_attention: bool = True      # Whether the LM uses causal self attention or not to reduce FLOPs
+    #   "peak"     -- KV cache allocated for a max-context sequence (giving a conservative lower bound on concurrency)
+    #   "expected" -- KV cache allocated for the mean in-flight footprint P + E[R]/2 (optimistic)
+    kv_provisioning: str = "peak"
 
     @property
     def causal_coef(self) -> float:

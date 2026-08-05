@@ -80,10 +80,13 @@ def report(r: SimResult) -> None:
 
     print("\n-- ROLLOUT (inference) " + "-" * 55)
     print(f"  KV/token {fmt(ro.kv_tok,'B')} | KV @peak ctx {fmt(ro.kv_peak,'B')}/seq "
-          f"| weights(inf) {fmt(ro.mem_weights_inf,'B')}")
+          f"| @expected {fmt(ro.kv_expected,'B')}/seq | weights(inf) {fmt(ro.mem_weights_inf,'B')}")
     if not ro.model_fits:
         print("  !! model weights exceed one node's HBM -- sharding penalty NOT modelled")
-    print(f"  concurrency per node (seq_par) = {ro.seq_par} ; microbatches = {ro.n_micro}")
+    if ro.model_fits and not ro.seq_fits:
+        print("  !! a single max-length sequence does NOT fit -- generation may not complete")
+    print(f"  provisioning = {s.algo.kv_provisioning} ; concurrency per node (seq_par) = {ro.seq_par} "
+          f"; mean fill/wave = {ro.seqs_per_wave:,.0f} ; waves = {ro.n_waves}")
     print(f"  oversample_ratio = {ro.oversample_ratio:.2f}")
     print(f"  t_decode = {fmt(ro.t_decode,'s')}  [{ro.decode_bound}-bound: "
           f"comp {fmt(ro.t_dec_comp,'s')} vs mem {fmt(ro.t_dec_mem,'s')}]")
