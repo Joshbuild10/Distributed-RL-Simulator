@@ -35,7 +35,8 @@ CALIBRATION_METRICS: Dict[str, Dict[str, Any]] = {
     "t_broadcast": dict(label="broadcast", model=lambda r: r.t_bc, fmt=lambda x: fmt(x, "s")),
     "vol_broadcast": dict(label="bcast volume", model=lambda r: r.vol_bc, fmt=lambda x: fmt(x, "B")),
     "tok_s_train": dict(label="trainer tok/s", model=lambda r: r.tok_s_train, fmt=lambda x: f"{x:,.0f}"),
-    "tok_s_inf": dict(label="infer tok/s", model=lambda r: r.tok_s_inf, fmt=lambda x: f"{x:,.0f}"),
+    # published inference tok/s = total generated / wall-clock => compare to ACHIEVED, not peak
+    "tok_s_inf": dict(label="infer tok/s", model=lambda r: r.tok_s_inf_achieved, fmt=lambda x: f"{x:,.0f}"),
     "mfu_train": dict(label="trainer MFU", model=lambda r: r.mfu_model, fmt=lambda x: f"{x*100:.1f}%"),
     "t_total": dict(label="total runtime", model=lambda r: r.t_total, fmt=lambda x: fmt(x, "s")),
     "inf_train_gputime_ratio": dict(label="inf:train GPU-time", model=lambda r: r.gputime_ratio,
@@ -119,8 +120,8 @@ def report(r: SimResult) -> None:
         star = "  <== BOTTLENECK" if k == r.bottleneck else ""
         print(f"    {k:<16} {fmt(v,'s'):>20}  {bar:<30}{star}")
     print(f"  throughput: trainer {r.tok_s_train:,.0f} tok/s | inference "
-          f"{r.tok_s_inf:,.0f} tok/s | implied MFU {r.mfu_model*100:.1f}% "
-          f"(model-FLOPs) / {r.mfu_hw*100:.1f}% (hardware)")
+          f"{r.tok_s_inf_achieved:,.0f} tok/s achieved ({r.tok_s_inf:,.0f} peak) "
+          f"| implied MFU {r.mfu_hw*100:.1f}%")
     print(f"  T_STEP = {fmt(r.t_step,'s')}   staleness = {r.staleness} step(s)")
     print(f"  N_STEPS = {r.n_steps}   ->   T_TOTAL = {fmt(r.t_total,'s')}")
     print(f"  ratio inference:training  --  true FLOPs {r.flop_ratio:.2f}x  |"

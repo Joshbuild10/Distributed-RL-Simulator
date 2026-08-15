@@ -93,6 +93,7 @@ class SimResult:
     flop_ratio: float
     gputime_ratio: float
     efficiency: Dict[str, float]
+    tok_s_inf_achieved: float
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +142,7 @@ def training_compute(s: Scenario) -> TrainingCompute:
     c_body = coef * (c_layers + c_attn)
 
     return TrainingCompute(tok_batch=tok_batch, c_layers=c_layers, c_attn=c_attn, c_update=c_body,
-                            attn_frac=c_attn / max(c_layers, 1.0))
+                            attn_frac=c_attn / max(c_layers + c_attn, 1.0))
 
 
 def training_time(s: Scenario, c_update: float) -> float:
@@ -329,8 +330,8 @@ def simulate(s: Scenario) -> SimResult:
 
     # Compute ratios: true FLOPs vs GPU-time
     flop_ratio = ro.c_rollout_total / tc.c_update
-    gputime_inf = ro.t_rollout * s.inf_hw.n_nodes
-    gputime_train = t_update * s.train_hw.n_nodes
+    gputime_inf = ro.t_rollout * s.inf_hw.n_nodes * s.inf_hw.gpus_per_node
+    gputime_train = t_update * s.train_hw.n_nodes * s.train_hw.gpus_per_node
     gputime_ratio = gputime_inf / max(gputime_train, 1e-9)
 
     # Throughput + implied MFU, for comparison against published tok/s and MFU.
@@ -339,7 +340,14 @@ def simulate(s: Scenario) -> SimResult:
     model_flops = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * tc.c_update
     peak_train = s.train_hw.n_nodes * s.train_hw.flops
     tok_s_train = tc.tok_batch / max(t_update, 1e-9)
-    tok_s_inf = (s.rl.size_batch * s.rl.response_len_mean * ro.oversample_ratio) / max(ro.t_rollout, 1e-9)
+    # Inference throughput, two conventions:
+    #   PEAK     -- tokens / t_rollout: the pool's flat-out rate while actively generating.
+    #   ACHIEVED -- tokens / t_step: the realised rate over the whole step. When the run is
+    #     NOT rollout-bound the pool idles waiting for the trainer, so achieved < peak; this is
+    #     the apples-to-apples match to a paper's reported "inference tok/s" (total gen / wall-clock).
+    gen_tokens = s.rl.size_batch * s.rl.response_len_mean * ro.oversample_ratio
+    tok_s_inf = gen_tokens / max(ro.t_rollout, 1e-9)
+    tok_s_inf_achieved = gen_tokens / max(t_step, 1e-9)
     mfu_model = model_flops / max(t_update * peak_train, 1e-9)
     mfu_hw = tc.c_update / max(t_update * peak_train, 1e-9)
 
@@ -352,4 +360,5 @@ def simulate(s: Scenario) -> SimResult:
         staleness=staleness, flop_ratio=flop_ratio,
         gputime_ratio=gputime_ratio,
         efficiency={k: v / t_step for k, v in stages.items()},
+        tok_s_inf_achieved=tok_s_inf_achieved,
     )
