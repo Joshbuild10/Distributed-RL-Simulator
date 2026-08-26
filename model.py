@@ -45,6 +45,7 @@ class TrainingMemory:
 class RolloutTerms:
     kv_tok: float
     mem_weights_inf: float
+    mem_weights_decode: float
     kv_peak: float
     kv_expected: float
     seq_par: int
@@ -112,6 +113,15 @@ def with_capacity_mult(s: Scenario, capacity_mult: float) -> Scenario:
 
 def with_n_nodes(s: Scenario, n_nodes: int) -> Scenario:
     return replace(s, inf_hw=replace(s.inf_hw, n_nodes=n_nodes))
+
+
+def with_mfu_scale(s: Scenario, k: float) -> Scenario:
+    """Scale BOTH trainer and inference MFU by k. Used by the implied-MFU inverse solve: the
+    published step time constrains whichever compute stage binds, so scaling both and reading off
+    the binding one recovers 'what efficiency would this run need', without having to know the
+    stage split in advance."""
+    return replace(s, train_hw=replace(s.train_hw, mfu=s.train_hw.mfu * k),
+                   inf_hw=replace(s.inf_hw, mfu=s.inf_hw.mfu * k))
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +192,22 @@ def training_memory(s: Scenario) -> TrainingMemory:
 
 def rollout_terms(s: Scenario) -> RolloutTerms:
     m, rl, a, hw, v = s.model, s.rl, s.algo, s.inf_hw, s.verify
-    # Calculate memory requirements for model
+    # Calculate memory requirements for model.
+    # CAPACITY: all params must be resident in HBM (every expert), so free-memory /
+    # concurrency / fit are sized on p_total.
     mem_weights_inf = a.b_weights_inf * m.p_total
+    # DECODE BANDWIDTH: each decode token reads only the ACTIVE path from HBM --
+    # attention + shared + the routed top-k experts (captured by p_active_layers) --
+    # plus the LM head (read every step to produce logits). For a dense model
+    # p_active_layers + p_head ~= p_total, so this is a ~no-op; for MoE it is smaller by
+    # ~p_total/p_active, which is the dominant correction to decode time (the full-weights
+    # read was the known MoE over-estimate).
+    # Clamped at the resident total: you cannot stream more bytes per token than are in HBM.
+    # The clamp is a no-op when p_active_layers correctly excludes embeddings/head; it only bites
+    # if a ModelSpec sets p_active_layers == p_total (i.e. already includes them), which would
+    # otherwise double-count the head and report >100% of resident weights.
+    mem_weights_decode = min(a.b_weights_inf * (m.p_active_layers + m.p_head),
+                             a.b_weights_inf * m.p_total)
     free_mem = hw.node_hbm - mem_weights_inf
     model_fits = free_mem > 0 # If model doesn't fit, some form of sharding needs to be employed during inference
 
@@ -238,7 +262,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
 
     # Time calculations (per wave)
     t_dec_comp = (c_decode * seqs_per_wave) / flops_eff if seq_par else float("inf")
-    t_dec_mem = (mem_weights_inf * rl.response_len_mean) / bw_eff if bw_eff else float("inf")
+    t_dec_mem = (mem_weights_decode * rl.response_len_mean) / bw_eff if bw_eff else float("inf")
     t_decode = max(t_dec_comp, t_dec_mem) # Overall decode step time
 
     t_inf_attn = (vol_kv * seqs_per_wave) / bw_eff if bw_eff else float("inf")
@@ -257,7 +281,8 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
         c_rollout_total = (c_prefill * rl.responses_per_prompt + c_decode) * rl.size_batch * oversample_ratio
 
     return RolloutTerms(
-        kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, kv_peak=kv_peak, kv_expected=kv_expected,
+        kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, mem_weights_decode=mem_weights_decode,
+        kv_peak=kv_peak, kv_expected=kv_expected,
         seq_par=seq_par, seqs_per_wave=seqs_per_wave, model_fits=model_fits, seq_fits=seq_fits,
         c_prefill=c_prefill, c_decode=c_decode,
         c_dec_attn=c_dec_attn, vol_kv=vol_kv, t_dec_comp=t_dec_comp,
@@ -325,8 +350,12 @@ def simulate(s: Scenario) -> SimResult:
     bottleneck = max(stages, key=stages.get)
     steps = n_steps(s)
     
-    # Calculates staleness
-    staleness = math.ceil((t_bc + gen_stage) / t_step) if t_step > 0 else 0
+    # Calculates staleness. Guard on finiteness, not just t_step > 0: when the inference model
+    # doesn't fit a node (model_fits=False), rollout_terms returns t_rollout=inf, which makes
+    # gen_stage and hence t_step infinite too (it's one of the maxed/summed stages) -- so the
+    # ratio becomes inf/inf = NaN, and math.ceil(NaN) raises. An infinite step has no meaningful
+    # staleness; report 0 rather than crash.
+    staleness = math.ceil((t_bc + gen_stage) / t_step) if t_step > 0 and math.isfinite(t_step) else 0
 
     # Compute ratios: true FLOPs vs GPU-time
     flop_ratio = ro.c_rollout_total / tc.c_update
@@ -339,6 +368,10 @@ def simulate(s: Scenario) -> SimResult:
     n_train_gpus = s.train_hw.n_nodes * s.train_hw.gpus_per_node
     model_flops = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * tc.c_update
     peak_train = s.train_hw.n_nodes * s.train_hw.flops
+    # STAGE-LOCAL (not whole-step): tokens in the training batch over the trainer's own active
+    # time, i.e. the rate while the trainer is actually working. This is the convention papers
+    # usually quote for "trainer tok/s" (prime-rl's 11.3K matches it), and the inference side
+    # mirrors it with tok_s_inf (peak) below.
     tok_s_train = tc.tok_batch / max(t_update, 1e-9)
     # Inference throughput, two conventions:
     #   PEAK     -- tokens / t_rollout: the pool's flat-out rate while actively generating.

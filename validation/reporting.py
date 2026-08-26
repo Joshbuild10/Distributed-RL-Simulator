@@ -34,8 +34,14 @@ CALIBRATION_METRICS: Dict[str, Dict[str, Any]] = {
     "t_step": dict(label="step time", model=lambda r: r.t_step, fmt=lambda x: fmt(x, "s")),
     "t_broadcast": dict(label="broadcast", model=lambda r: r.t_bc, fmt=lambda x: fmt(x, "s")),
     "vol_broadcast": dict(label="bcast volume", model=lambda r: r.vol_bc, fmt=lambda x: fmt(x, "B")),
+    # trainer: published figures are stage-local (batch tokens / trainer active time) -- prime-rl's
+    # 11.3K matches tok_s_train directly.
     "tok_s_train": dict(label="trainer tok/s", model=lambda r: r.tok_s_train, fmt=lambda x: f"{x:,.0f}"),
-    # published inference tok/s = total generated / wall-clock => compare to ACHIEVED, not peak
+    # inference: DELIBERATELY compared against ACHIEVED (gen / t_step), not the stage-local peak.
+    # prime-rl's published 14.4K is total-generated / wall-clock: vs achieved it lands -3%, vs
+    # stage-local peak +117%. Rollout-bound runs (INTELLECT-3) have peak == achieved so the choice
+    # is only visible on update-bound runs. Flip to r.tok_s_inf only if a source is known to quote
+    # the flat-out generation rate instead.
     "tok_s_inf": dict(label="infer tok/s", model=lambda r: r.tok_s_inf_achieved, fmt=lambda x: f"{x:,.0f}"),
     "mfu_train": dict(label="trainer MFU", model=lambda r: r.mfu_model, fmt=lambda x: f"{x*100:.1f}%"),
     "t_total": dict(label="total runtime", model=lambda r: r.t_total, fmt=lambda x: fmt(x, "s")),
@@ -82,6 +88,10 @@ def report(r: SimResult) -> None:
     print("\n-- ROLLOUT (inference) " + "-" * 55)
     print(f"  KV/token {fmt(ro.kv_tok,'B')} | KV @peak ctx {fmt(ro.kv_peak,'B')}/seq "
           f"| @expected {fmt(ro.kv_expected,'B')}/seq | weights(inf) {fmt(ro.mem_weights_inf,'B')}")
+    # capacity (all experts resident) vs decode bandwidth (active path + head) -- equal for dense,
+    # ~p_total/p_active smaller for MoE, which is what sets t_decode's memory floor.
+    print(f"  weights read per decode token {fmt(ro.mem_weights_decode,'B')} "
+          f"({ro.mem_weights_decode/max(ro.mem_weights_inf,1)*100:.0f}% of resident weights)")
     if not ro.model_fits:
         print("  !! model weights exceed one node's HBM -- sharding penalty NOT modelled")
     if ro.model_fits and not ro.seq_fits:
@@ -119,8 +129,10 @@ def report(r: SimResult) -> None:
         bar = "#" * int(round(30 * r.efficiency[k]))
         star = "  <== BOTTLENECK" if k == r.bottleneck else ""
         print(f"    {k:<16} {fmt(v,'s'):>20}  {bar:<30}{star}")
-    print(f"  throughput: trainer {r.tok_s_train:,.0f} tok/s | inference "
-          f"{r.tok_s_inf_achieved:,.0f} tok/s achieved ({r.tok_s_inf:,.0f} peak) "
+    # Both stages reported STAGE-LOCAL first (rate while that stage is actually running), with the
+    # whole-step "achieved" rate second. Papers differ on which they quote; see CALIBRATION_METRICS.
+    print(f"  throughput: trainer {r.tok_s_train:,.0f} tok/s (stage-local) | inference "
+          f"{r.tok_s_inf:,.0f} tok/s stage-local, {r.tok_s_inf_achieved:,.0f} achieved over the step "
           f"| implied MFU {r.mfu_hw*100:.1f}%")
     print(f"  T_STEP = {fmt(r.t_step,'s')}   staleness = {r.staleness} step(s)")
     print(f"  N_STEPS = {r.n_steps}   ->   T_TOTAL = {fmt(r.t_total,'s')}")

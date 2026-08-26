@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-drl_model.py -- Analytic runtime model for distributed / asynchronous RL on LLMs.
+validate.py -- Validate the analytic runtime model against PUBLISHED distributed-RL runs.
 
-Implements the rollout -> verify -> update -> broadcast loop as specified, following
-the prime-rl / INTELLECT architecture. Equations follow the user's term-splitting
-(equivalent to, but arranged differently from, the standard forms).
+Reports every published scenario (predicted vs published step time, throughput, MFU,
+broadcast) and then inverse-calibrates: given a published outcome, solve for the input the
+paper did not disclose (usually E[R], or the swarm's effective capacity).
 
-Run:  python3 drl_model.py
-      python3 drl_model.py --sweep     (adds response-length sensitivity tables)
+The model implements the rollout -> verify -> update -> broadcast loop of the prime-rl /
+INTELLECT architecture. Equations follow the project's term-splitting (equivalent to, but
+arranged differently from, the standard forms).
+
+Run:  python -m validation.validate            (from the repo root)
+      python validation/validate.py
+      ... --sweep                              (adds response-length sensitivity tables)
 
 Conventions
 -----------
@@ -19,27 +24,39 @@ Conventions
 * Causal masking => leading coefficient 2 (not 4) on prefill/training attention.
   Decode attention keeps coefficient 4 because the sum over growing context
   already counts only causal pairs.
+* Throughput is reported STAGE-LOCAL (rate while that stage is running) alongside the
+  whole-step "achieved" rate; see reporting.CALIBRATION_METRICS for which one each
+  published figure is compared against.
 * All times in seconds, all memory in bytes, all compute in FLOPs.
 
-Module layout
--------------
-* specs.py     -- dataclasses (ModelSpec, RLSpec, AlgoSpec, HWSpec, NetSpec,
-                  VerifySpec, Scenario)
-* model.py     -- the analytic core (training/rollout/verify/broadcast terms,
-                  simulate(), scenario-tweak helpers)
-* solvers.py   -- inverse calibration against published numbers
-* presets.py   -- hardware/model constants and the published scenarios
-* reporting.py -- fmt()/report()/sweep_response_len()
+Repo layout
+-----------
+* specs.py                -- dataclasses (ModelSpec, RLSpec, AlgoSpec, HWSpec, NetSpec,
+                             VerifySpec, Scenario)
+* model.py                -- the analytic core (training/rollout/verify/broadcast terms,
+                             simulate(), scenario-tweak helpers)
+* validation/presets.py   -- hardware/model constants and the published scenarios
+* validation/solvers.py   -- inverse calibration against published numbers
+* validation/reporting.py -- fmt()/report()/sweep_response_len()
+* feasibility.py          -- feasibility core (FeasConfig, evaluate, min_cluster)
+* feasibility_tables.py   -- feasibility sweeps/tables/CSV writers
 """
 
 import argparse
+import os
+import sys
 from typing import Optional, Tuple
 
-from presets import (intellect2, intellect3, primerl_paper, primerl_deepdive,
-                     areal_1_5b, areal_7b, areal_14b, areal_32b)
+# Repo root on sys.path so `specs`/`model` resolve when this file is run directly as a
+# script (no-op under `python -m validation.validate`, where the root is already sys.path[0]).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from model import SimResult, Scenario, simulate, with_response_len, with_capacity_mult
-from solvers import solve_for_capacity, solve_for_response_len
-from reporting import fmt, report, sweep_response_len
+from validation.presets import (intellect2, intellect3, primerl_paper, primerl_deepdive,
+                                areal_1_5b, areal_7b, areal_14b, areal_32b)
+from validation.solvers import solve_for_capacity, solve_for_response_len, implied_mfu_report
+from validation.reporting import fmt, report, sweep_response_len
+from validation.uncertainty import print_mc_report
 
 
 def _capacity_calibration(sc: Scenario, target_gen: float) -> Tuple[Optional[float], Optional[SimResult]]:
@@ -136,6 +153,26 @@ def main() -> None:
         print(f"  {tag:<24}{fmt(r.t_step,'s'):>16}{fmt(sc.published['t_step'],'s'):>14}"
               f"{err:>+6.0f}%{rstr:>11}")
     print("  (inv E[R] under the 32,768-cap = plausible; '!' = above cap)")
+
+    # Predictive intervals. The inverse-calibration blocks above ask "what input value would
+    # reproduce the published number"; this asks the complementary question -- given honest
+    # uncertainty on the inputs nobody published, is the published number inside our predictive
+    # range at all? Text counterpart of dashboard chart 1a's error bars.
+    # Explicit short labels, not derived from sc.name: splitting on " (" collapsed
+    # TARGET-SHORT/TARGET-LONG to one indistinguishable "INTELLECT-2" and left "prime-rl
+    # reference run" wide enough to break the column alignment.
+    anchors_for_mc = [("INTELLECT-2 short", intellect2("short")),
+                      ("INTELLECT-2 long", intellect2("long")),
+                      ("INTELLECT-3", intellect3()),
+                      ("prime-rl", primerl_paper()),
+                      ("AReaL-1.5B", areal_1_5b()), ("AReaL-7B", areal_7b()),
+                      ("AReaL-14B", areal_14b()), ("AReaL-32B", areal_32b())]
+    print_mc_report(anchors_for_mc)
+
+    # Complementary to the MC: instead of "is the gap inside our uncertainty", ask "what single
+    # efficiency would close it". For update-bound anchors this is an implied trainer MFU, and its
+    # decline with shard degree is the concrete, quantified form of the FSDP-penalty residual.
+    implied_mfu_report(anchors_for_mc)
 
     if args.sweep:
         print("\n" + "=" * 78)

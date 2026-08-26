@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-import math
 
 # ---------------------------------------------------------------------------
 # Specs
@@ -42,10 +41,12 @@ class ModelSpec:
         """
         Context length where dot-product attention's FLOPs make up a significant `fraction` of the layer's
         FLOPs.
-        Derived from: ratio = T*D*L / P_active_layers  =>  T = frac*P/(D*L).
-        Note this is much SMALLER for MoE (small P_active) at the same D, L.
+        Derived on the SAME basis the actual c_attn term uses (attn_coef = N*H*L, not D*L):
+        per token, attn ~ causal_coef*T*attn_coef and layers ~ 2*P_active_layers, so with the
+        causal coefficient 2 the ratio is T*attn_coef/P_active_layers  =>  T = frac*P/attn_coef.
+        Note this is much SMALLER for MoE (small P_active) at the same N, H, L.
         """
-        return fraction * self.p_active_layers / (self.d_model * self.n_layers)
+        return fraction * self.p_active_layers / self.attn_coef
 
 
 @dataclass
@@ -63,7 +64,17 @@ class RLSpec:
     prefix_caching: bool = True           # Share the prefill cache across the G responses
     # Oversampling 
     success_rate: Optional[float] = None        # probability of task success. If given, it's used to derive the oversampling ratio
-    oversample_override: Optional[float] = 1    # Manual input for the oversampling ratio    
+    oversample_override: Optional[float] = 1    # Manual input for the oversampling ratio
+
+    def __post_init__(self):
+        # A batch of 0 rollouts is not a valid RL config (there's no data to train on), and
+        # left unchecked it causes n_waves = ceil(0/x) = 0 a few layers down in model.py, which
+        # turns into a 0/0 ZeroDivisionError deep inside rollout_terms() -- fail here instead,
+        # at construction, with a message that actually points at the problem.
+        if self.prompts_per_batch <= 0:
+            raise ValueError(f"prompts_per_batch must be >= 1, got {self.prompts_per_batch}")
+        if self.responses_per_prompt <= 0:
+            raise ValueError(f"responses_per_prompt must be >= 1, got {self.responses_per_prompt}")
 
     @property
     def size_batch(self) -> int:
@@ -83,7 +94,15 @@ class RLSpec:
         """Oversampling ratio.
         When a success rate is given, it's derived from zero-advantage filtering.
         A group of G binary-reward samples is discarded iff all G agree,
-        so the fraction of accepted samples is f = 1 - [p^G + (1-p)^G] and oversample_ratio = 1/f."""
+        so the fraction of accepted samples is f = 1 - [p^G + (1-p)^G] and oversample_ratio = 1/f.
+
+        PRECEDENCE IS DELIBERATE: `oversample_override` wins over `success_rate`, and it defaults
+        to 1 -- so the derived path only runs when the override is explicitly set to None. Real
+        per-dataset success rates are hard to obtain and vary a lot, so a measured/calibrated omega
+        is preferred to a derived one. Caveat if you do use the derived path: f is strongly
+        non-linear and real RL datasets are BIMODAL in difficulty, so evaluating f at a single mean
+        p understates omega badly -- the correct quantity is omega = 1/E_p[f(p)] over the prompt
+        difficulty distribution (measured: 1.5-4.7x vs ~1.0 from the single-p form)."""
         if self.oversample_override is not None:
             return self.oversample_override
         if self.success_rate is None:
