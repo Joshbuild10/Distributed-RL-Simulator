@@ -32,7 +32,7 @@ from feasibility_core import (
     all_targets, cell_text, config_lines, evaluate, fmt_num, fmt_ratio, fmt_time,
     min_wall_full_stock, model_targets, n_steps, optimal_split, per_step_flop, fmt_rate,
     required_bcast_mbps, sites_power, smallest_fitting_gpu, split_for, total_time, with_cfg, GB,
-    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap,
+    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus,
 )
 
 
@@ -196,6 +196,12 @@ def max_compute_operating_point(cfg, stock=None):
     drags this number down. It genuinely varies with the split/bottleneck (e.g. craters when
     broadcast dominates at very large stock), unlike the flat mfu_model/mfu_hw echo."""
     c = cfg if stock is None else with_cfg(cfg, stock_gpus=stock)
+    # Cap the node to the fleet (a node can't exceed the stock, and disaggregation needs >=2 nodes):
+    # without this a stock smaller than ~2 configured nodes silently over-allocates whole nodes and
+    # reports a fleet far larger than `stock`. No-op whenever the configured node already fits.
+    eff = effective_node_gpus(c.gpus_per_node, c.stock_gpus)
+    if eff != c.gpus_per_node:
+        c = with_cfg(c, gpus_per_node=eff)
     n_total, sol = max_achievable_split(c)
     if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
         return None
@@ -205,7 +211,7 @@ def max_compute_operating_point(cfg, stock=None):
     # made every "T_step" in this table off by a constant factor of n_steps(cfg) for whatever
     # target_c_rl happened to be set on cfg (e.g. 954x too large at the default 6e23), which made
     # every derived steps/max-C_RL number ~954x too SMALL. The real per-step time is r.t_step.
-    pf = per_step_flop(cfg)   # node-count-independent, unaffected by stock; == r.tc.c_update + r.ro.c_rollout_total
+    pf = per_step_flop(c)   # node-count-independent, unaffected by stock; == r.tc.c_update + r.ro.c_rollout_total
     s = r.scenario
     train_peak = s.train_hw.n_nodes * s.train_hw.flops   # FLOPs/s, hardware peak (no MFU derating)
     inf_peak = s.inf_hw.n_nodes * s.inf_hw.flops
@@ -213,7 +219,7 @@ def max_compute_operating_point(cfg, stock=None):
     # model-FLOPs convention: strip the recompute coefficient off the training term only (inference
     # is already forward-only, no recompute distinction) -- mirrors model.py's own model_flops calc.
     model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
-    return dict(gpus=n_total * cfg.gpus_per_node, n_total=n_total, nt=nt, ni=ni, frac=frac,
+    return dict(gpus=n_total * c.gpus_per_node, n_total=n_total, nt=nt, ni=ni, frac=frac,
                 t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
                 t_broadcast=r.t_bc, bottleneck=r.bottleneck,
                 mfu_model=model_flops_step / (r.t_step * total_peak),

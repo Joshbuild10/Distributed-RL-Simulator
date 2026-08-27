@@ -4,7 +4,7 @@ feasibility_core.py -- Config, solver and formatting primitives for the distribu
 feasibility study. NO printing lives here; the sweeps/tables/CSVs are in feasibility.py.
 
 Split this way so you can tweak parameters and reason about the solver without scrolling past
-fifteen table renderers, and so other tools (experiments/plot_dashboard.py) can import the core
+fifteen table renderers, and so other tools (results/plot_dashboard.py) can import the core
 without pulling in presentation code.
 
 Question the study answers: for an RL run of a given COMPUTE SCALE (anchored to known models or
@@ -104,6 +104,22 @@ def node_gpus_power_cap(gpu, node_kw):
     return max(1, int(node_kw * 1000 // GPUS[gpu]["watts"]))
 
 
+def effective_node_gpus(gpus_per_node, stock_gpus):
+    """Node size actually usable at a given fleet size: min(configured, stock//2), floored at 1.
+
+    Two hard limits a by-stock sweep must respect, both otherwise silently violated when the
+    configured node is large (e.g. an NVL72/720 node against a 16-GPU fleet):
+      - a node cannot be bigger than the whole fleet;
+      - disaggregated RL needs >=2 nodes (>=1 trainer + >=1 inference), which optimal_split floors
+        each side to -- so a node is at most HALF the stock, else optimal_split over-allocates whole
+        configured-size nodes and reports a fleet far larger than `stock` (the old bug: stock=16 with
+        a 720-node silently simulated 2x720=1,440 GPUs, so 16/128/1024 all returned the same value).
+    When the configured node already fits (stock >= 2*node) this is a no-op, so it only reshapes the
+    small-fleet end of a sweep -- there it correctly reports the small-node physics (or no-fit, when
+    even stock//2 GPUs can't hold the model for single-node inference) instead of a fiction."""
+    return max(1, min(gpus_per_node, stock_gpus // 2))
+
+
 # ---------------------------------------------------------------------------
 # Target compute-scale presets  (total RL FLOP; see data/reasoning_models.csv for provenance)
 # ---------------------------------------------------------------------------
@@ -199,9 +215,9 @@ class FeasConfig:
     target_c_rl: float
     # Hardware
     gpu: str = "H100"
-    gpus_per_node: int = 16
+    gpus_per_node: int = 16             # Should at most 72 for NVLink shared memory/bandwidth capacity.
     wan_mbps: float = 1000.0
-    compression: float = 50.0          # weight-sync compression (A-iii stand-in): int4~4x x sparsify/sync
+    compression: float = 16.0          # weight-sync compression (A-iii stand-in): int4~4x x sparsify/sync
     # RL run config (per-step compute)
     model: ModelSpec = field(default_factory=lambda: MODELS[DEFAULT_MODEL])
     prompts_per_batch: int = 128
@@ -212,19 +228,11 @@ class FeasConfig:
     omega: float = 1.5
     b_optimiser: float = 4.0            # Muon optimiser
     mfu_train: float = 0.40
-    mfu_inf: float = 0.25
+    mfu_inf: float = 0.3
     inf_bw_mult: float = 1.0           # HBM-bandwidth multiplier (sensitivity knob)
-    inf_flop_mult: float = 1.0         # inference compute-throughput multiplier. e.g. 4-bit inference
-                                       # on FP4 tensor cores is inf_flop_mult=4 (4x dense throughput).
-                                       # Trainer is untouched (training stays BF16).
+    inf_flop_mult: float = 1.0         # Inference compute-throughput multiplier. e.g. 4-bit inference on FP4 tensor cores is inf_flop_mult=4 (4x dense throughput).
     b_weights_inf: float = 2.0         # inference-side weight precision, BYTES/param (BF16=2, 4-bit=0.5).
-                                       # Drives decode weight-load traffic, HBM weight storage
-                                       # (-> free KV room -> concurrency), AND the raw broadcast
-                                       # volume -- so lowering it captures 4-bit weights everywhere
-                                       # on the inference side WITHOUT the inf_bw_mult hack (physical
-                                       # HBM bandwidth is unchanged; 4-bit just moves less data).
-    b_kv: float = 2.0                  # KV-cache precision, BYTES (BF16=2, 4-bit KV=0.5): KV memory
-                                       # footprint + traffic.
+    b_kv: float = 2.0                  # KV-cache precision, BYTES (BF16=2, 4-bit KV=0.5): KV memory footprint + traffic.
     hbm_mult: float = 1.0              # HBM-capacity multiplier (sensitivity knob: concurrency / model-fit)
 
     # Infrastructure
@@ -464,7 +472,7 @@ def split_for(cfg, N):
 
 
 # ---------------------------------------------------------------------------
-# Formatting (shared by feasibility.py tables and experiments/plot_dashboard.py)
+# Formatting (shared by feasibility.py tables and results/plot_dashboard.py)
 # ---------------------------------------------------------------------------
 def fmt_time(s):
     """Single shared time formatter -- every table/CSV-adjacent display and the dashboard (as
