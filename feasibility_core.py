@@ -28,8 +28,10 @@ KNOWN FIRST-CUT BIASES (documented; do not read absolutes as final):
     active path (p_active_layers + head); HBM CAPACITY still holds all experts (p_total);
     KV-cache traffic stays dense (all layers). inf_bw_mult is a pure HBM-bandwidth knob.
   * No training-side FSDP penalty (A-ii): penalty_para=1.0 (update optimistic at high shard).
-  * No Rahman eta / DiLoCo outer loop (A-iii): weights broadcast every step; `compression`
-    is the stand-in lever until the sync-interval model lands (so the WAN bound is pessimistic).
+  * Off-policy staleness (A-iii): `sync_interval` (k) now models the DiLoCo/async_level relaxation
+    -- k=0 on-policy (serial), k=1 one-step off-policy (overlapped, default), k>=2 broadcasts every
+    k steps (per-step broadcast /k). Its BENEFIT only: the sample-efficiency cost of staleness is
+    not modelled, so large k reads as a free win. `compression` is now purely a quantization factor.
   * Single-node inference only: weights must fit one node (no inference TP across nodes).
 Time windows are ours; anchor them against Epoch's distributed-training feasibility model when
 writing.
@@ -218,6 +220,8 @@ class FeasConfig:
     gpus_per_node: int = 16             # Should at most 72 for NVLink shared memory/bandwidth capacity.
     wan_mbps: float = 1000.0
     compression: float = 16.0          # weight-sync compression (A-iii stand-in): int4~4x x sparsify/sync
+    sync_interval: float = 1.0         # Off-policy staleness degree k:
+
     # RL run config (per-step compute)
     model: ModelSpec = field(default_factory=lambda: MODELS[DEFAULT_MODEL])
     prompts_per_batch: int = 128
@@ -257,7 +261,8 @@ class FeasConfig:
                       max_response_len=int(self.er * 2), n_steps_override=1,
                       oversample_override=self.omega, prefix_caching=True),
             algo=AlgoSpec(b_optimiser=self.b_optimiser, recomp_act=1, recomp_old=0, opt_steps=1,
-                          in_flight_updates=True, compression_ratio=self.compression,
+                          compression_ratio=self.compression,
+                          sync_interval=self.sync_interval,   # k>=1 => overlapped (max); k=0 => serial (sum)
                           b_weights_inf=self.b_weights_inf, b_kv=self.b_kv),
             train_hw=HWSpec("trainer", n_nodes=n_train, gpus_per_node=self.gpus_per_node,
                             mfu=self.mfu_train, penalty_para=1.0, n_shard=n_train * self.gpus_per_node, **train_nh),
@@ -426,9 +431,16 @@ def required_bcast_mbps(cfg, window_s):
     r = ev["r"]
     t_compute = max(r.t_update, r.stages["rollout+verify"])
     lat = r.scenario.net.latency
-    if not (math.isfinite(t_compute) and t_compute > lat):
+    # Off-policy staleness k>=2 gives the broadcast k compute-steps (not 1) to finish before it binds,
+    # so the break-even wire rate falls by ~k. Mirrors model.py's broadcast divisor exactly (which
+    # floors at 1, so k=0 and k=1 both get a single step's budget): broadcast stops being the
+    # bottleneck once (vol/bw + lat)/max(k,1) <= t_compute, i.e. bw >= vol / (max(k,1)*t_compute - lat).
+    # k defaults to 1, so this is a no-op unless a caller sets a k>=2 sync interval.
+    k = max(r.scenario.algo.sync_interval, 1)
+    budget = k * t_compute - lat
+    if not (math.isfinite(t_compute) and budget > 0):
         return None, ev
-    return r.vol_bc * cfg.compression * 8 / 1e6 / (t_compute - lat), ev
+    return r.vol_bc * cfg.compression * 8 / 1e6 / budget, ev
 
 
 # arXiv 2603.12151's largest EMPIRICALLY TESTED rollout batch. No longer a hard bound on the
@@ -541,6 +553,8 @@ def config_lines(cfg):
         f"gpu: {cfg.gpu} ({cfg.gpus_per_node} GPUs/node)",
         f"wan_mbps: {cfg.wan_mbps:g}",
         f"compression: {cfg.compression:g}x",
+        f"sync_interval (off-policy k): {cfg.sync_interval:g} "
+        f"({'on-policy, serial/sum' if cfg.sync_interval < 1 else f'{cfg.sync_interval:g}-step off-policy, overlapped/max, broadcast /{max(cfg.sync_interval,1):g}'})",
         f"batch: {cfg.prompts_per_batch} prompts x {cfg.responses_per_prompt} responses "
         f"= {cfg.prompts_per_batch * cfg.responses_per_prompt:,} rollouts/step",
         f"prompt_len: {cfg.prompt_len:,} tok",

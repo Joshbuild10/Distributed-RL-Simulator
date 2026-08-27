@@ -25,6 +25,7 @@ model: Llama-3.1-405B
 gpu: H100 (16 GPUs/node)
 wan_mbps: 1000
 compression: 16x
+sync_interval (off-policy k): 1 (1-step off-policy, overlapped/max, broadcast /1)
 batch: 128 prompts x 512 responses = 65,536 rollouts/step
 prompt_len: 1,000 tok
 er (E[R]): 20,000 tok (cv=0.5)

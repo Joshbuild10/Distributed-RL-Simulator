@@ -135,7 +135,10 @@ class AlgoSpec:
     seqs_per_micro_per_gpu: float = 1.0     # gradient-accumulation micro-batch: this sets activation memory
     
     compression_ratio: float = 1.0      # Weight compression factor
-    in_flight_updates: bool = True      # broadcast overlapped with generation
+    sync_interval: float = 1.0          # Off-policy staleness degree k. Affects how stages and the per-step broadcast time:
+                                        #   k=0  ON-POLICY: Rollout, update and broadcast run serialy, so t_step = sum(stages); broadcast full.
+                                        #   k=1  One-step OFF-POLICY. Update and broadcast overlap generation. So t_step = max(stages); broadcast full        hidden behind the step.
+                                        #   k>=2 k-step off-policy: weights are broadcast once every k steps, so the per-step broadcast cost is 1/k of a full sync.
     include_attention: bool = True      # Add the compute for dot-product attention terms
     causal_attention: bool = True      # Whether the LM uses causal self attention or not to reduce FLOPs
     #   "peak"     -- KV cache allocated for a max-context sequence (giving a conservative lower bound on concurrency)

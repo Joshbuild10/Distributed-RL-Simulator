@@ -305,11 +305,15 @@ def verify_time(s: Scenario, tok_batch: float, oversample_ratio: float) -> float
     return c / max(v.verifier_flops * v.verifier_mfu, 1.0)
 
 
-# Returns the time used for weight broadcasting (assumes uniform upload/download speeds)
+# Returns the per-step broadcast time (assumes uniform upload/download speeds)
+# Effects of the off-policy staleness (a.sync_interval = k):
+#   For k=0 (on-policy) and k=1 (one-step off-policy), the full weights are broadcasted every step
+#   For k>=2 the full weight volume is broadcast once every k steps, so its per-step contribution is 1/k of a full sync.
 def broadcast_time(s: Scenario) -> tuple:
     m, a, n = s.model, s.algo, s.net
     vol = (a.b_weights_inf * m.p_total) / a.compression_ratio
-    return vol, vol / n.bandwidth + n.latency
+    k = max(a.sync_interval, 1)   # k=0 and k=1 both broadcast every step (divisor 1); k>=2 amortises
+    return vol, (vol / n.bandwidth + n.latency) / k
 
 
 # Returns the number of training steps either as given, or given the number of propmts in the dataset and batch size.
@@ -338,13 +342,16 @@ def simulate(s: Scenario) -> SimResult:
     gen_stage = ro.t_rollout + t_verify
     stages = {"rollout+verify": gen_stage, "update": t_update, "broadcast": t_bc}
 
-    # Calculates step time depending on if in-flight weight updates are conducted (overlapping times), or not
-    if s.algo.in_flight_updates:
+    # Step composition is set by the off-policy staleness degree k = algo.sync_interval:
+    #   k=0  on-policy -> the next batch needs the just-updated weights, so stages run SERIALLY
+    #        (t_step = sum). k>=1 off-policy -> inference runs >=1 step behind on stale weights, so
+    #        update+broadcast OVERLAP generation (t_step = max). (Supersedes in_flight_updates.)
+    if s.algo.sync_interval >= 1:
         t_step = max(stages.values())
-        mode = "overlapped (max of stages)"
+        mode = f"overlapped ({s.algo.sync_interval:g}-step off-policy, max of stages)"
     else:
         t_step = gen_stage + t_update + t_bc
-        mode = "serial (sum of stages)"
+        mode = "serial (on-policy, sum of stages)"
 
     # Calculates the longest (bottleneck) step
     bottleneck = max(stages, key=stages.get)
