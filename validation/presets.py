@@ -107,7 +107,7 @@ def intellect3() -> Scenario:
         algo=AlgoSpec(b_optimiser=4.0, recomp_act=1, recomp_old=0, # Muon optimiser
                       opt_steps=1, seqs_per_micro_per_gpu=1.0,
                       in_flight_updates=True),
-        train_hw=HWSpec("16x8 H200", n_nodes=16, mfu=0.40, penalty_para=1,
+        train_hw=HWSpec("16x8 H200", n_nodes=16, mfu=0.17, penalty_para=1,  # MoE @16nd, nanotron 70-80B x0.6
                         n_shard=32, **H200_NODE),
         inf_hw=HWSpec("44x8 H200 (vLLM, TP=8)", n_nodes=44, mfu=0.25,
                       bw_eff=0.85, **H200_NODE),
@@ -229,10 +229,15 @@ R1_QWEN_32B = replace(QWQ32B, name="R1-Distill-Qwen-32B")   # Qwen2.5-32B backbo
 
 # Presets for the range of runs in the AReaL paper https://arxiv.org/pdf/2505.24298
 def _areal(model: ModelSpec, n_nodes_total: int, steps: int, total_hours: float,
-           er_mean: float, task: str, inf_tp: int = 8, er_cv: float = 0.5) -> Scenario:
+           er_mean: float, task: str, mfu_train: float, inf_tp: int = 8, er_cv: float = 0.5) -> Scenario:
     """One AReaL run. 1/4 of nodes train, 3/4 infer (async, in-flight).
     512 prompts x 16 responses per prompt = 8192 batch size. Max prompt 1024; 32K max context length;
-    4 PPO minibatches; H800 nodes; per-step = total_hours*3600/steps."""
+    4 PPO minibatches; H800 nodes; per-step = total_hours*3600/steps.
+
+    mfu_train is the per-config trainer MFU derived from the Ultra-Scale Playbook node-matched
+    RL-like (FSDP) frontier -- see validation/uncertainty.py mfu_train_tri(), which centres its
+    Monte-Carlo prior on exactly this value. It is NOT the flat 0.40 nominal: a data-grounded MFU
+    is a better deterministic input, so the point prediction reflects it too."""
 
     train_nodes = round(n_nodes_total * 0.25)
     inf_nodes = n_nodes_total - train_nodes
@@ -250,7 +255,7 @@ def _areal(model: ModelSpec, n_nodes_total: int, steps: int, total_hours: float,
         algo=AlgoSpec(b_optimiser=8.0, recomp_act=1, recomp_old=0, opt_steps=4,
                       seqs_per_micro_per_gpu=1.0, in_flight_updates=True),   # async
         train_hw=HWSpec(f"{train_nodes}x8 H800 (FSDP)", n_nodes=train_nodes,
-                        gpus_per_node=8, mfu=0.40, penalty_para=1,
+                        gpus_per_node=8, mfu=mfu_train, penalty_para=1,
                         n_shard=train_nodes * 8, **H800_NODE),
         inf_hw=HWSpec(f"{inf_gpus} H800 (TP={inf_tp})", n_nodes=inf_gpus // inf_tp,
                       gpus_per_node=inf_tp, mfu=0.25, bw_eff=0.85, **inf_node),
@@ -262,20 +267,20 @@ def _areal(model: ModelSpec, n_nodes_total: int, steps: int, total_hours: float,
 
 
 
-def areal_1_5b(): return _areal(R1_QWEN_1_5B, 16, 250, 14.8, 10000.0,  inf_tp=1, task="math", er_cv=0.8)
+def areal_1_5b(): return _areal(R1_QWEN_1_5B, 16, 250, 14.8, 10000.0,  inf_tp=1, task="math", er_cv=0.8, mfu_train=0.31)
 # 7B: Mean response measured at 10,125, cv=0.77
 #  === R1-Distill-Qwen-7B on DeepScaleR (math) @ T=1.0, cap=32768 ===
 #  samples 256  | truncated at cap: 6 (2%)
 #  mean 10,125 | median 7,040 | std 7,747 | cv 0.77
 #  p50 7,069 | p90 21,434 | p95 27,032 | p99 32,768 | max 32,768
-def areal_7b():   return _areal(R1_QWEN_7B,   24, 250, 25.4, 10000.0, task="math", er_cv=0.80)
+def areal_7b():   return _areal(R1_QWEN_7B,   24, 250, 25.4, 10000.0, task="math", er_cv=0.80, mfu_train=0.34)
 # === deepseek-ai/DeepSeek-R1-Distill-Qwen-14B on DeepCoder pooled (code) @ T=1.0, cap=32,768 ===
 #   samples 512 | censored at cap: 0 (0.0%)
 #   mean 10,376  [95% CI 9,339 - 11,395]  (+/-10%, cluster-robust)
 #   median 10,616 | std 4,638 | cv 0.45
 #   p50 10,636 | p90 16,374 | p95 17,448 | p99 19,800 | max 22,583
 #   variance: within-prompt sd 2,207 | between-prompt sd 4,113 | ICC 0.78
-def areal_14b():  return _areal(R1_QWEN_14B,  32,  80, 21.9, 10500.0, task="code", er_cv=0.45)
+def areal_14b():  return _areal(R1_QWEN_14B,  32,  80, 21.9, 10500.0, task="code", er_cv=0.45, mfu_train=0.32)
 # === Qwen/Qwen3-32B on DeepCoder pooled (code) @ T=1.0, cap=32,768 ===
 # Not exact model match.
 #  samples 256 | censored at cap: 0 (0.0%)
@@ -283,4 +288,4 @@ def areal_14b():  return _areal(R1_QWEN_14B,  32,  80, 21.9, 10500.0, task="code
 #  median 7,858 | std 2,285 | cv 0.28
 #  p50 7,866 | p90 11,190 | p95 11,863 | p99 13,785 | max 14,896
 #  variance: within-prompt sd 1,450 | between-prompt sd 1,796 | ICC 0.61
-def areal_32b():  return _areal(R1_QWEN_32B,  48,  60, 31.1, 8000.0, task="code", er_cv=0.30)
+def areal_32b():  return _areal(R1_QWEN_32B,  48,  60, 31.1, 8000.0, task="code", er_cv=0.30, mfu_train=0.28)
