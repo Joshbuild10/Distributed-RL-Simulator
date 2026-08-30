@@ -24,7 +24,7 @@ from validation.solvers import solve_for_mfu
 from model import simulate
 from feasibility_core import (FeasConfig, MODELS, POLICY_THRESHOLDS, GPUS, HIGH_BATCH,
                               BASELINE_BATCH, BATCH_CAP, BATCH_SWEEP, HBM_MULTS, HIGH_END_GPUS,
-                              batch_split, all_targets, model_targets, evaluate,
+                              batch_split, target_batch, target_batch_iso, all_targets, model_targets, evaluate,
                               smallest_fitting_gpu, total_time, optimal_split, per_step_flop,
                               required_bcast_mbps, config_lines, node_gpus_tpp_cap,
                               tpp_per_chip, node_gpus_power_cap, effective_node_gpus,
@@ -139,9 +139,56 @@ def _tlab(name):
 def _hmlab(name):
     return f"{name} {MT[name]:.1e}"            # heatmap row label (1 line)
 _LAB2NAME = {**{_tlab(n): n for n in MT}, **{_hmlab(n): n for n in MT}}
+
+# EXPERIMENT TOGGLE -- batch sizing across compute budgets. Flip WITHOUT editing code:
+#     BATCH_MODE=flat       python results/plot_dashboard.py    # one fixed batch for every target
+#     BATCH_MODE=scaled     python results/plot_dashboard.py    # x4 heuristic, batch grows w/ budget (default)
+#     BATCH_MODE=isocompute python results/plot_dashboard.py    # paper-grounded law (arXiv 2603.12151)
+# or just change the default below.
+#   "scaled":     per-target batch 256 -> 65,536 in x4 rungs, SQUARE Bp x n split
+#                 (feasibility_core.target_batch). Simple heuristic; every model target runs a
+#                 sizeable step count -- a fixed 65k batch leaves R1-Zero finishing in ~3 steps,
+#                 where the serial-latency wall (the whole study) is moot.
+#   "isocompute": arXiv 2603.12151's decomposition -- FIX problems/batch Bp=128 (a stability knob),
+#                 scale rollouts/problem n up a SATURATING ladder (8..512, cap = easy-set 512), so
+#                 the batch is problem-heavy at low budget and rollout-heavy (saturating) at high
+#                 budget. See feasibility_core.target_batch_iso. [EXPERIMENTAL -- may be removed.]
+#   "flat":       the single base-config batch for every target (revert).
+# Applies to every per-budget chart (2a/2e/2f/2l, DEC-vs-CEN 2n/2p) and the A1 appendix. Charts that
+# set their own batch (2h/2i) and stock-swept charts (2b/2o/2q) are unaffected in any mode.
+BATCH_MODE = os.environ.get("BATCH_MODE", "scaled").lower()
+assert BATCH_MODE in ("flat", "scaled", "isocompute"), f"BATCH_MODE must be flat|scaled|isocompute, got {BATCH_MODE!r}"
+def _batch_ov(name):
+    """{prompts_per_batch, responses_per_prompt} for a target's batch under BATCH_MODE, or {} under
+    flat mode / when `name` is not a model target (e.g. any leftover governance-threshold row)."""
+    if BATCH_MODE == "flat":
+        return {}
+    if BATCH_MODE == "isocompute":
+        pair = target_batch_iso(name)
+        return dict(prompts_per_batch=pair[0], responses_per_prompt=pair[1]) if pair else {}
+    tb = target_batch(name)                                 # "scaled"
+    if tb is None:
+        return {}
+    bp, rp = batch_split(tb)
+    return dict(prompts_per_batch=bp, responses_per_prompt=rp)
+
+BATCH_DESC = {
+    "flat": "Flat base batch across all targets (BATCH_MODE=flat).",
+    "scaled": "<b>Batch scales with the compute budget</b> (BATCH_MODE=scaled): 256 &rarr; 65,536 in "
+              "&times;4 square rungs across the five model targets, so each runs a sizeable step count "
+              "rather than the smallest spending its whole budget in ~3 steps.",
+    "isocompute": "<b>Batch follows the IsoCompute law</b> (BATCH_MODE=isocompute, arXiv 2603.12151): "
+                  "fixed problems/batch B<sub>p</sub>=128, rollouts/problem n scaling 8&rarr;512 "
+                  "(saturating) &mdash; problem-heavy at low budget, rollout-heavy at high budget.",
+}[BATCH_MODE]
+
 def _tcfg(label, **ov):
-    """Config for whichever target a chart label (either label style) refers to."""
-    return _with(base, target_c_rl=MT[_LAB2NAME[label]], **ov)
+    """Config for whichever target a chart label (either label style) refers to. Applies the
+    budget-scaled batch (USE_TARGET_BATCH) unless the caller passes its own batch in `ov`."""
+    name = _LAB2NAME[label]
+    if "prompts_per_batch" not in ov:
+        ov = {**_batch_ov(name), **ov}
+    return _with(base, target_c_rl=MT[name], **ov)
 
 frontier = grouped_bars([_tlab(n) for n in MT], [(f"{d}d", PAL[i]) for i, d in enumerate(WIN)],
                         lambda cat, s: fbar(_tcfg(cat), int(s[:-1]) * 86400),
@@ -396,9 +443,11 @@ DC_WIN_S = 180 * 86400
 DC_SERIES = [("decentralised", PAL[3]), ("centralised", PAL[2])]
 
 
-def _dccfg(scen, crl, int4=False):
+def _dccfg(scen, name, int4=False):
+    """DEC/CEN config for target `name`. Applies the budget-scaled batch (BATCH_MODE) on top of
+    the decentralised/centralised hardware overrides -- neither overlaps the batch keys."""
     ov = ((CEN_INT4 if int4 else CEN) if scen == "centralised" else (DEC_INT4 if int4 else DEC))
-    return _with(base, target_c_rl=crl, **ov)
+    return _with(base, target_c_rl=MT[name], **{**_batch_ov(name), **ov})
 
 
 # "find the best node size": sweep the centralised node at the reference target, report the true
@@ -421,10 +470,10 @@ _cen_note = (f"NVL72 uses {_cen_at72:,} GPUs; swept optimum node={_CEN_BEST[0]} 
              if (_CEN_BEST and _cen_at72) else "node sweep n/a")
 
 dc_frontier = grouped_bars([_tlab(n) for n in MT], DC_SERIES,
-                           lambda cat, s: fbar(_dccfg(s, MT[_LAB2NAME[cat]]), DC_WIN_S),
+                           lambda cat, s: fbar(_dccfg(s, _LAB2NAME[cat]), DC_WIN_S),
                            f"2n. Decentralised vs centralised -- min GPUs to finish (Llama-405B, 180d, {DC_COMP:g}x sync). cf. 2a",
                            ylab="min GPUs to finish in 180d",
-                           annotfn=lambda cat, s: ffloor(_dccfg(s, MT[_LAB2NAME[cat]]), DC_WIN_S))
+                           annotfn=lambda cat, s: ffloor(_dccfg(s, _LAB2NAME[cat]), DC_WIN_S))
 
 dc_stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES,
                            lambda cat, s: max_c_rl_at_stock(_with(base, **(CEN if s == "centralised" else DEC)),
@@ -436,11 +485,11 @@ dc_stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES,
                            hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
 
 dc_frontier_int4 = grouped_bars([_tlab(n) for n in MT], DC_SERIES,
-                                lambda cat, s: fbar(_dccfg(s, MT[_LAB2NAME[cat]], int4=True), DC_WIN_S),
+                                lambda cat, s: fbar(_dccfg(s, _LAB2NAME[cat], int4=True), DC_WIN_S),
                                 f"2p. Same, min GPUs at lighter 4x sync -- exposes the WAN/broadcast wall "
                                 f"(decentralised flips from wave- to broadcast-bound at frontier scale). cf. 2n",
                                 ylab="min GPUs to finish in 180d",
-                                annotfn=lambda cat, s: ffloor(_dccfg(s, MT[_LAB2NAME[cat]], int4=True), DC_WIN_S))
+                                annotfn=lambda cat, s: ffloor(_dccfg(s, _LAB2NAME[cat], int4=True), DC_WIN_S))
 
 dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES,
                                 lambda cat, s: max_c_rl_at_stock(_with(base, **(CEN_INT4 if s == "centralised" else DEC_INT4)),
@@ -450,6 +499,39 @@ dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES
                                 ylab="max achievable RL compute (FLOP)",
                                 annotfn=lambda cat, s: "no-fit", labelfn=fmt_sci,
                                 hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
+
+# --- 2r/2s: the decentralised->centralised transition swept DIRECTLY on the inference node size
+# (GPUs per connected NVLink domain), the lever that separates small donated islands (16) from a
+# datacentre NVL72 rack (72) and beyond. WAN/compression held at the centralised fabric so the
+# broadcast never binds and this isolates the inference-wave/HBM effect of node size. 2r: the max
+# compute a full stock can burn in 180d (rises ~linearly -- a bigger NVLink domain pools bandwidth,
+# lowering the sequential-decode rollout floor). 2s: min GPUs for a Grok-3-scale run (the U-shape --
+# 16-GPU islands are rollout-bound and cost ~2x; >=32 is update-bound and flat, creeping up past ~72
+# as node granularity coarsens).
+INF_NODE_SWEEP = (16, 32, 64, 72, 128)
+INF_NODE_LABEL = {n: (f"{n}\n(NVL72)" if n == 72 else str(n)) for n in INF_NODE_SWEEP}
+_LBL2NODE = {v: k for k, v in INF_NODE_LABEL.items()}
+DC_NODE_FIX = dict(wan_mbps=CEN["wan_mbps"], compression=CEN["compression"])   # centralised fabric; isolate node size
+_GROK3_BOV = _batch_ov("Grok-3-Reasoning")                                     # hold Grok-3's batch across the sweep
+
+dc_node_maxc = grouped_bars([INF_NODE_LABEL[n] for n in INF_NODE_SWEEP], [("180d", PAL[2])],
+                            lambda cat, s: max_c_rl_at_stock(_with(base, gpus_per_node=_LBL2NODE[cat], **DC_NODE_FIX),
+                                                             base.stock_gpus, DC_WIN_S),
+                            f"2r. Max achievable RL compute vs inference node size (full {_fn(base.stock_gpus)}-GPU stock, "
+                            f"180d, 1Tbps, {DC_COMP:g}x). Bigger NVLink domain -> lower decode floor -> more compute",
+                            ylab="max achievable RL compute (FLOP)",
+                            annotfn=lambda cat, s: "no-fit", labelfn=fmt_sci,
+                            hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
+
+dc_node_gpus = grouped_bars([INF_NODE_LABEL[n] for n in INF_NODE_SWEEP], [("180d", PAL[3])],
+                            lambda cat, s: fbar(_with(base, target_c_rl=GROK3_C_RL, gpus_per_node=_LBL2NODE[cat],
+                                                      **DC_NODE_FIX, **_GROK3_BOV), DC_WIN_S),
+                            f"2s. Min GPUs to finish a Grok-3-scale run ({GROK3_C_RL:.1e}, 180d) vs inference node size. "
+                            f"16-GPU islands are rollout-bound (~2x); >=32 update-bound",
+                            ylab="min GPUs to finish in 180d",
+                            scale="linear",
+                            annotfn=lambda cat, s: ffloor(_with(base, target_c_rl=GROK3_C_RL, gpus_per_node=_LBL2NODE[cat],
+                                                               **DC_NODE_FIX, **_GROK3_BOV), DC_WIN_S))
 
 # --- 2k: effect of mean response length E[R] on feasibility, grouped by RL compute budget (not
 # swept at one fixed target) -- mirrors feasibility.py's er_table(). Standardised on 180d (matching
@@ -494,6 +576,14 @@ POWER_CAPS_MW = (1, 5)
 per_pow = {g: (GPUS[g]["watts"], *[node_gpus_power_cap(g, mw * 1000) for mw in POWER_CAPS_MW])
            for g in GFAM}
 
+# Cerebras CS-4 rack (3x WSE-3 wafers) as an inference node -- appended to the caps table only, with
+# caveats. Per-wafer figures; a rack is x3. Two things the table makes concrete: (a) a single wafer's
+# TPP is ~126 H100-equivalents, so it blows the 16-H100 export NODE cap by ~8x (a 3-wafer rack ~24x);
+# (b) at 130 kW/rack the SITE power cap bites hard -- a 1 MW site runs only a handful of racks.
+CS4 = "Cerebras-CS4"
+_cs4_h100eq = tpp_per_chip(CS4) / tpp_per_chip("H100")          # H100-equiv of TPP per wafer (~126)
+_cs4_pow = [node_gpus_power_cap(CS4, mw * 1000) for mw in POWER_CAPS_MW]   # wafers per 1MW / 5MW site
+
 
 # ------------------------------------------------------------------ 3. LENGTHS
 def meanlen(model, dom):
@@ -528,20 +618,24 @@ agfig = grouped_bars([AGN[n] for n in agorder],
                      ylab="tokens (log)")
 
 
-# ------------------------------------------------------------------ A1 table (all targets, via evaluate)
+# ------------------------------------------------------------------ A1 table (model targets, via evaluate)
+# model_targets() only (the C=1e24/1e25/1e26 governance-threshold rows were dropped -- they added
+# little next to the five real model anchors).
 trows = []
-for n, tc in all_targets().items():
+for n, tc in model_targets().items():
+    bov = _batch_ov(n)                       # budget-scaled batch for the model target
+    btot = bov["prompts_per_batch"] * bov["responses_per_prompt"] if bov else base.prompts_per_batch * base.responses_per_prompt
     for d in WIN:
-        ev = evaluate(_with(base, target_c_rl=tc), d * 86400)
+        ev = evaluate(_with(base, target_c_rl=tc, **bov), d * 86400)
         if not ev["runnable"]:
-            trows.append(f"<tr><td>{n}</td><td>{tc:.1e}</td><td>{d}d</td>"
+            trows.append(f"<tr><td>{n}</td><td>{tc:.1e}</td><td>{_fn(btot)}</td><td>{d}d</td>"
                          f"<td colspan='12' class='inf'>no single-node fit</td></tr>")
             continue
         feas = "yes" if ev["feasible"] else "NO*"
         gpus = f"{ev['gpus']:,}" + ("" if ev["feasible"] else "*")
         cost = ("$" + _fn(ev["cost"])) if ev["feasible"] else "&mdash;"
         r = ev["r"]
-        trows.append(f"<tr><td>{n}</td><td>{tc:.1e}</td><td>{d}d</td><td>{feas}</td><td>{gpus}</td>"
+        trows.append(f"<tr><td>{n}</td><td>{tc:.1e}</td><td>{_fn(btot)}</td><td>{d}d</td><td>{feas}</td><td>{gpus}</td>"
                      f"<td>{ev['pct_stock']:.2f}%</td><td>{_tr(ev['frac'])}</td><td>{_fn(ev['steps'])}</td>"
                      f"<td>{_ft(ev['wall_s'])}</td><td>{cost}</td><td>{ev['bottleneck']}</td>"
                      f"<td>{_ft(r.t_step)}</td><td>{_ft(r.t_update)}</td>"
@@ -569,9 +663,10 @@ for lab, mdl, pub, err in CAL:
 # feasibility.py's er_table() column-for-column (same 15 columns as the A1 appendix above, with
 # E[R] swapped in for window) so the CLI table and this page always agree.
 er_trows = []
-for n, tc in all_targets().items():
+for n, tc in model_targets().items():                       # thresholds dropped; matches chart 2l
+    bov = _batch_ov(n)                                       # scaled batch, same as chart 2l (_tcfg)
     for _, lbl in ER_POINTS:
-        ev = evaluate(_with(base, target_c_rl=tc, er=ER_LABEL_TOK[lbl]), 180 * 86400)
+        ev = evaluate(_with(base, target_c_rl=tc, er=ER_LABEL_TOK[lbl], **bov), 180 * 86400)
         if not ev["runnable"]:
             er_trows.append(f"<tr><td>{n}</td><td>{tc:.1e}</td><td>{lbl}</td>"
                             f"<td colspan='12' class='inf'>no single-node fit</td></tr>")
@@ -607,7 +702,15 @@ for s in STOCK_SWEEP:
                            f"<td>{op['mfu_hw']*100:.0f}%</td><td>{op['bottleneck']}</td>"
                            f"<td>{_fn(steps)}</td><td>{c_rl:.2e}</td></tr>")
 
-config_block = "\n".join(esc(line) for line in config_lines(base))
+# The base config's own "batch:" line is the flat default; when a per-budget batch mode is active it
+# is OVERRIDDEN per model target in every per-budget chart, so append a line saying so (else the
+# single batch figure in the dump silently misrepresents what most charts actually ran).
+_batch_cfg_lines = list(config_lines(base))
+if BATCH_MODE != "flat":
+    _pairs = ", ".join(f"{n} {_batch_ov(n)['prompts_per_batch']}x{_batch_ov(n)['responses_per_prompt']}" for n in MT)
+    _batch_cfg_lines.append(f"batch OVERRIDE (BATCH_MODE={BATCH_MODE}): the flat batch above is replaced "
+                            f"per target in every per-budget chart -- {_pairs}")
+config_block = "\n".join(esc(line) for line in _batch_cfg_lines)
 
 BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 <p class="sub">Recomputed live from the model + feasibility code; lengths read from results/lengths/. Bars log-scaled unless noted. Regenerate: <code>python results/plot_dashboard.py</code></p>
@@ -621,12 +724,14 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 {panel(cal_bars)}{panel(cal_err)}{panel(cal_mfu)}
 
 <h2>2 &middot; Feasibility &amp; sensitivity ({MODEL_NAME}, native MoE decode)</h2>
-<p class="sub">Infeasible-in-window is never dropped: heatmap cells and dashed bars show the full-stock wall-clock FLOOR (days to expend the FLOPs, marked "!"); no-fit = weights exceed one node.</p>
+<p class="sub">Infeasible-in-window is never dropped: heatmap cells and dashed bars show the full-stock wall-clock FLOOR (days to expend the FLOPs, marked "!"); no-fit = weights exceed one node. {BATCH_DESC} Applies to every per-budget chart (2a/2e/2f/2l and 2n/2p below); fixed-batch charts (2h/2i) and stock-swept charts (2b/2o/2q) are unchanged.</p>
 {panel(frontier)}{panel(stockfig)}{panel(tfig)}{panel(crossmodel)}{panel(gpu_hm)}{panel(gpucap_hm)}{panel(bwfig)}{panel(bg_fig)}{panel(batchcompare)}{panel(hbmfig)}{panel(pol_hm)}{panel(er_gpu_fig)}{panel(quant_fig)}
 
 <h3>2.1 &middot; Decentralised vs centralised datacentre &mdash; the serial-latency penalty (Llama-405B, 180d)</h3>
 <p class="sub">The downside of distributed RL is serial step latency: (i) broadcasting fresh weights trainer&rarr;inference over the WAN, and (ii) the number of inference "waves", set by how much aggregate HBM (concurrency + weight-load bandwidth) a node pools. A centralised datacentre relaxes both &mdash; a large NVLink domain fuses GPUs into one fat node ({CEN['gpus_per_node']}/node here, the GB200 NVL72 rack) and an intra-DC fabric gives ~terabit trainer&rarr;inference links ({int(CEN['wan_mbps']/1000):,} Gbps) &mdash; vs small {DEC['gpus_per_node']}-GPU islands on {int(DEC['wan_mbps']):,} Mbps internet. Everything else is held at <code>base</code>, so the gap between paired bars is the decentralisation penalty. <b>Best centralised node size:</b> {_cen_note}. <b>Primary pair (2n, 2o) at {DC_COMP:g}&times; sync:</b> the broadcast is small enough that the WAN is inert, so the penalty is purely the inference-wave/node-size effect &mdash; ~2&times; the GPUs at frontier scale (though at small budgets decentralised is actually <i>cheaper</i>: centralised's 2&times;NVL72 floor is 144 GPUs). <b>Companion pair (2p, 2q) at lighter 4&times; sync:</b> the broadcast term grows 4&times; and the 1&nbsp;Gbps decentralised link becomes binding &mdash; decentralised flips from wave- to broadcast-bound (2p) and its achievable compute <i>plateaus</i> as the broadcast wall caps it, while centralised (terabit) keeps scaling (2q).</p>
 {panel(dc_frontier)}{panel(dc_stockfig)}{panel(dc_frontier_int4)}{panel(dc_stockfig_int4)}
+<p class="sub"><b>Inference node size sweep (2r, 2s).</b> The decentralised&rarr;centralised axis made explicit: GPUs per connected NVLink domain from 16 (small donated islands) through 72 (a GB200 NVL72 rack) to 128, WAN/compression held at the centralised fabric so this isolates the node-size effect. 2r &mdash; a bigger domain pools HBM bandwidth, lowers the sequential-decode rollout floor, and raises the compute a full stock can burn ~linearly. 2s &mdash; for a fixed Grok-3-scale run the cost is U-shaped: 16-GPU islands are rollout-bound (~2&times; the GPUs), &ge;32 flips to update-bound and flattens, creeping back up past ~72 as coarse node granularity wastes GPUs.</p>
+{panel(dc_node_maxc)}{panel(dc_node_gpus)}
 
 <h2>3 &middot; Response-length campaign (measured E[R])</h2>
 <p class="sub">Feeds the runtime model's per-(model,task) E[R]. Agentic effective-context is the multi-turn regime the single-turn model doesn't yet represent.</p>
@@ -640,15 +745,18 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 </table></div>
 
 <h2>Appendix &middot; Node/site caps by GPU family</h2>
-<p class="sub">Two independent physical caps on how a site can be built. <b>Export node cap</b> (BIS CCC): GPUs/node so the node stays under {H100_EQUIV} H100-equivalents of both TPP (compute = flops&times;16&nbsp;bit) and HBM (1,280&nbsp;GB) &mdash; whichever binds; this is the node size used in chart 2f. <b>Power envelope</b>: GPUs a site can run under a 1&nbsp;MW / 5&nbsp;MW draw (floor(MW / board&nbsp;W)) &mdash; a detectability-tier / site cap on total GPUs, separate from the node cap.</p>
+<p class="sub">Two independent physical caps on how a site can be built. <b>Export node cap</b> (BIS CCC): GPUs/node so the node stays under {H100_EQUIV} H100-equivalents of both TPP (compute = flops&times;16&nbsp;bit) and HBM (1,280&nbsp;GB) &mdash; whichever binds; this is the node size used in chart 2f. <b>Power envelope</b>: GPUs a site can run under a 1&nbsp;MW / 5&nbsp;MW draw (floor(MW / board&nbsp;W)) &mdash; a detectability-tier / site cap on total GPUs, separate from the node cap. The <b>Cerebras CS-4</b> row (per WSE-3 wafer; a rack = 3 wafers) is included to contrast a wafer-scale part against the cap regime &mdash; see the caveats below it.</p>
 <div class="panel"><table>
 <tr><th>GPU</th><th>dense BF16 TFLOP/s</th><th>TPP/chip (TFLOP-bit/s)</th><th>HBM GB</th><th>board W</th><th>export node cap (GPUs/node)</th><th>GPUs @1MW</th><th>GPUs @5MW</th></tr>
 {''.join(f"<tr><td>{g}</td><td>{GPUS[g]['flops']/1e12:.0f}</td><td>{tpp_per_chip(g)/1e12:,.0f}</td><td>{GPUS[g]['hbm_gb']}</td><td>{GPUS[g]['watts']}</td><td>{CAP_NODE[g]}</td><td>{per_pow[g][1]:,}</td><td>{per_pow[g][2]:,}</td></tr>" for g in GFAM)}
+<tr><td><b>Cerebras&nbsp;CS-4</b><br><span class="inf" style="text-align:left">(per WSE-3 wafer)</span></td><td>{GPUS[CS4]['flops']/1e12:,.0f}</td><td>{tpp_per_chip(CS4)/1e12:,.0f}</td><td>44&nbsp;<i>SRAM</i></td><td>{GPUS[CS4]['watts']:,}</td><td>0&dagger; ({_cs4_h100eq:.0f}&times;&nbsp;H100/wafer)</td><td>{_cs4_pow[0]:,}</td><td>{_cs4_pow[1]:,}</td></tr>
 </table></div>
+<p class="sub">&dagger; <b>Cerebras caveats.</b> A single WSE-3 wafer is ~{_cs4_h100eq:.0f} H100-equivalents of TPP, so it exceeds the {H100_EQUIV}-H100 export node cap by ~{_cs4_h100eq/H100_EQUIV:.0f}&times; on its own &mdash; a 3-wafer CS-4 rack is ~{3*_cs4_h100eq/H100_EQUIV:.0f}&times; over (the "0" node cap means not even one wafer fits under the cap). Its 44&nbsp;GB is <b>on-wafer SRAM, not HBM</b>: a rack holds ~132&nbsp;GB, far short of Llama-405B's 810&nbsp;GB, so it can't serve a frontier dense model as a single-node inference target in this model &mdash; Cerebras streams weights from external MemoryX, which the single-node-inference assumption here doesn't represent (so CS-4 is deliberately kept out of the feasibility charts). FLOP/s is the WSE-3 dense-BF16 headline (EST); CS-4's ~2&times; is FP8/sparsity this BF16 roofline excludes. At {GPUS[CS4]['watts']*3/1000:.0f}&nbsp;kW/rack the site power cap binds hard: ~{_cs4_pow[0]//3} racks under 1&nbsp;MW, ~{_cs4_pow[1]//3} under 5&nbsp;MW.</p>
 
 <h2>Appendix &middot; A1 sweep table</h2>
+<p class="sub">{BATCH_DESC}</p>
 <div class="panel"><table>
-<tr><th>target</th><th>C_RL</th><th>window</th><th>feas</th><th>GPUs</th><th>%stock</th><th>tr:inf</th><th>steps</th><th>wall</th><th>cost</th><th>bottleneck</th><th>T_step</th><th>T_update</th><th>T_rollout</th><th>T_bcast</th></tr>
+<tr><th>target</th><th>C_RL</th><th>batch</th><th>window</th><th>feas</th><th>GPUs</th><th>%stock</th><th>tr:inf</th><th>steps</th><th>wall</th><th>cost</th><th>bottleneck</th><th>T_step</th><th>T_update</th><th>T_rollout</th><th>T_bcast</th></tr>
 {''.join(trows)}
 </table></div>
 

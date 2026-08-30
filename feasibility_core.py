@@ -53,12 +53,13 @@ GPUS = {
     "H100":    dict(flops=989e12,  hbm_gb=80,  bw_tbs=3.35, watts=700),
     "H200":    dict(flops=989e12,  hbm_gb=141, bw_tbs=4.80, watts=700),
     "B200":    dict(flops=2250e12, hbm_gb=192, bw_tbs=8.00, watts=1000),
-    "B300":    dict(flops=2250e12, hbm_gb=288, bw_tbs=8.00, watts=1100),  # EST: Blackwell Ultra HGX
+    "B300":    dict(flops=2250e12, hbm_gb=288, bw_tbs=8.00, watts=1100),  # Est: Blackwell Ultra HGX
     "GB200":   dict(flops=2500e12, hbm_gb=186, bw_tbs=8.00, watts=1200),  # Per-GPU in an NVL rack
     "GB300":   dict(flops=2500e12, hbm_gb=288, bw_tbs=8.00, watts=1400),  # Est, per-GPU
 #    "MI300X":  dict(flops=1307e12, hbm_gb=192, bw_tbs=5.30, watts=750),   # EST: AMD, see note above
     "MI355X":  dict(flops=2500e12, hbm_gb=288, bw_tbs=8.2, watts=1400),
     "RTX4090": dict(flops=165e12,  hbm_gb=24,  bw_tbs=1.01, watts=450),   # non-flagship / consumer P2P
+    "Cerebras-CS4": dict(flops=125e15, hbm_gb=44, bw_tbs=14333.0, watts=43333), # Cerebras CS-4, as reported by semianalysis.
 }
 
 # The high-end families, for the GPU-family x target sweeps. Ordered by HBM bandwidth then
@@ -172,6 +173,45 @@ def model_targets(top=None):
     return dict(sorted(t.items(), key=lambda kv: kv[1])[-top:])
 
 
+# --- Experiment: per-target batch that scales with compute budget --------------------------------
+# A single FIXED batch across all targets leaves the smallest budgets finishing in a handful of steps
+# (at 65,536 batch, DeepSeek-R1-Zero's 2e22 spends its whole budget in ~3 steps), where serial step
+# latency -- the whole point of the study -- is irrelevant. Scaling the batch with the budget instead
+# gives every target a comparable, SIZEABLE step count (~750-37,000), so the latency wall actually
+# binds across the ladder. Smallest target = TARGET_BATCH_BASE, x4 per step up the sorted budget
+# ladder (256 -> 1,024 -> 4,096 -> 16,384 -> 65,536 for the five model targets). This is also
+# physically defensible: critical batch size grows with training scale. Callers opt in explicitly
+# (the dashboard's USE_TARGET_BATCH flag); model_targets()/the solver are unchanged.
+TARGET_BATCH_BASE = 256
+
+def target_batch(name):
+    """Total rollout batch assigned to model target `name`, scaling x4 with each rung up the budget
+    ladder (TARGET_BATCH_BASE for the smallest). None for an unknown name. Split into a square
+    prompts x responses via batch_split() at the call site."""
+    order = [n for n, _ in sorted(MODEL_TARGETS.items(), key=lambda kv: kv[1][0])]
+    return TARGET_BATCH_BASE * 4 ** order.index(name) if name in order else None
+
+
+# --- IsoCompute law (arXiv 2603.12151), an alternative to the x4 heuristic above ------------------
+# That paper decomposes RL sampling compute as C = Bp * n * M (problems-per-batch x rollouts-per-
+# problem x update-steps) and finds: (i) Bp is mainly a STABILITY knob, marginal within a moderate
+# range -> hold it FIXED at a small-stable value; (ii) the compute-sensitive lever is n, which rises
+# with budget along a sigmoid in log-log and SATURATES (~512 easy set, ~128-256 hard); (iii) the mix
+# shifts from problem-heavy (low budget) to rollout-heavy (high budget). So instead of a square
+# Bp x n that grows unboundedly, this fixes Bp and scales n up a saturating rung ladder, capped at
+# the easy-set ceiling. ISO_N_BY_RUNG is a STYLIZED read of the paper's Figure-7 shape (powers of
+# two, saturating at 512), NOT their raw fitted curve -- the exact n*(C) values weren't extractable.
+ISO_BP = 128                                 # fixed problems/batch: mid of the paper's {32..1024} sweep, "stable"
+ISO_N_BY_RUNG = (8, 32, 128, 256, 512)       # rollouts/problem up the budget ladder; saturating, cap 512 (easy set)
+
+def target_batch_iso(name):
+    """(prompts_per_batch, responses_per_prompt) for model target `name` under the IsoCompute law:
+    fixed Bp = ISO_BP, rollouts-per-problem n from the saturating ISO_N_BY_RUNG ladder. Total Bp*n
+    stays <= 65,536 (the paper's hardware cap). None for an unknown name."""
+    order = [n for n, _ in sorted(MODEL_TARGETS.items(), key=lambda kv: kv[1][0])]
+    return (ISO_BP, ISO_N_BY_RUNG[order.index(name)]) if name in order else None
+
+
 # ---------------------------------------------------------------------------
 # Model list for the cross-model feasibility sweep + the default target model.
 # CAVEAT: Kimi-K3 internals (d_model/layers/heads/vocab) are ESTIMATES (post-cutoff, DeepSeek-V3/Kimi-K2-scaled)
@@ -220,7 +260,7 @@ class FeasConfig:
     gpus_per_node: int = 16             # Should at most 72 for NVLink shared memory/bandwidth capacity.
     wan_mbps: float = 1000.0
     compression: float = 16.0          # weight-sync compression (A-iii stand-in): int4~4x x sparsify/sync
-    sync_interval: float = 1.0         # Off-policy staleness degree k:
+    sync_interval: float = 1         # Off-policy staleness degree k
 
     # RL run config (per-step compute)
     model: ModelSpec = field(default_factory=lambda: MODELS[DEFAULT_MODEL])
