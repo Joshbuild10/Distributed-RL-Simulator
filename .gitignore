@@ -6,3 +6,4 @@ model_output.txt
 experiments/
 *.txt
 data/
+results/poster*

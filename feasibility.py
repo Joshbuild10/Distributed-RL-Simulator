@@ -627,7 +627,7 @@ def max_compute_by_model(base, windows_d=(90, 180, 720)):
 
 # Default GPU-count sweep for max_compute_by_stock / write_max_compute_by_stock_csv / the dashboard
 # panel. Edit this tuple (here, or pass stocks= explicitly) to change which stock sizes are swept.
-STOCK_SWEEP = (16, 128, 1024, 10_000, 100_000, 1_000_000)
+STOCK_SWEEP = (32, 128, 1024, 10_000, 100_000, 1_000_000)
 
 
 def max_compute_by_stock(base, stocks=STOCK_SWEEP, windows_d=(30, 90, 180, 720)):

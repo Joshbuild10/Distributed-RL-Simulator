@@ -355,7 +355,7 @@ pol_hm = heatmap([_hmlab(n) for n in MT], [f"{n}\n{v:.0e}" for n, v in bars],
 # --- 2b. inverse of 2a: given a FIXED GPU stock (swept, not the target), what's the MAXIMUM RL
 # compute achievable at the optimal split. Mirrors feasibility.py's max_compute_by_stock table
 # (same optimal_split/per_step_flop calls) so the CLI table and this chart always agree.
-STOCK_SWEEP = (16, 128, 1024, 10_000, 100_000, 1_000_000)
+STOCK_SWEEP = (32, 128, 1024, 10_000, 100_000, 1_000_000)
 STOCK_LABEL = {s: f"{_fn(s)} GPUs" for s in STOCK_SWEEP}
 LABEL_STOCK = {v: k for k, v in STOCK_LABEL.items()}
 
