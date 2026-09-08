@@ -63,8 +63,7 @@ def render_matrix(title, rows, cols, cellfn, row_label=str, col_label=str,
 def _cfg_hdr(base):
     return (f"GPU={base.gpu}, WAN={base.wan_mbps:.0f}Mbps, comp={base.compression:.0f}x, "
             f"E[R]={base.er:,.0f}, batch={base.prompts_per_batch}x{base.responses_per_prompt}, "
-            f"omega={base.omega:g}, stock={fmt_num(base.stock_gpus)} GPUs, "
-            f"split={'fine(1%)' if base.fine_split else 'coarse(13pt)'}")
+            f"omega={base.omega:g}, stock={fmt_num(base.stock_gpus)} GPUs")
 
 
 def target_label(name, tc):
@@ -954,8 +953,6 @@ def config_from_args(a):
             over[fld] = v
     if a.batch:
         over.update(_parse_batch(a.batch))
-    if a.fine_split:
-        over["fine_split"] = True
     return with_cfg(cfg, **over) if over else cfg
 
 

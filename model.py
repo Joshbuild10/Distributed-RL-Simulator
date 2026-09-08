@@ -276,8 +276,13 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
 
     # A "wave" is a continuously-batched set of sequences with rollouts generation.
     # To distribute the workload evenly across waves, we calculate the average sequences per wave
-    n_waves = math.ceil(rl.size_batch / max(seq_par * hw.n_nodes, 1)) if seq_par else float("inf")
-    seqs_per_wave = rl.size_batch / (hw.n_nodes * n_waves) if seq_par else float("inf")
+    # If the parallel processing capacity of allocated nodes exceeds the number of sequences to be generated,
+    # the number of nodes utilised is capped. Assumes up to 4-way inference-time model parallelism across nodes.
+    # TODO: Have parallelism degree depend on bandwidth between nodes
+    active_nodes = min(hw.n_nodes, max(1, 8 * math.ceil(rl.size_batch / seq_par))) if seq_par else 0
+
+    n_waves = math.ceil(rl.size_batch / max(seq_par * active_nodes, 1)) if seq_par else float("inf")
+    seqs_per_wave = rl.size_batch / (active_nodes * n_waves) if seq_par else float("inf")
 
     # Time calculations (per wave)
     t_dec_comp = (c_decode * seqs_per_wave) / flops_eff if seq_par else float("inf")

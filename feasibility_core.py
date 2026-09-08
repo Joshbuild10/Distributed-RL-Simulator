@@ -33,9 +33,9 @@ KNOWN FIRST-CUT BIASES (documented; do not read absolutes as final):
     the remote INFERENCE sites IS charged (net.*).
   * Trainer node model: each update node holds a FULL model REPLICA (intra-node shard only, no cross-
     node model parallelism); multiple trainer nodes are DATA-PARALLEL replicas. Nodes are up to
-    train_gpus_per_node (128) GPUs; a SINGLE trainer node is right-sized DOWN (rightsize_trainer) to
-    the min GPUs that (a) fit the replica + resident activation in ONE node and (b) keep update off
-    the critical path. The solver ENFORCES the full mem.fits (replica + activation <= one node's HBM),
+    train_gpus_per_node (128) GPUs; a SINGLE trainer node is right-sized DOWN (min_gpus_for_tsb) to
+    the min GPUs that (a) fit the replica + resident activation in ONE node and (b) keep update
+    inside the step's time budget. The solver ENFORCES the full mem.fits (replica + activation <= one node's HBM),
     so a node too small for the replica is no-fit (would need the disallowed cross-node parallelism).
     act_site_parallel=True: activation is sequence/tensor-parallel sharded WITHIN the node (does not
     scale with node size); the data-parallel per-GPU path (act_site_parallel=False) is kept for the
@@ -304,7 +304,6 @@ class FeasConfig:
     gpu_hr_usd: float = 2.0
     stock_gpus: int = 1_500_000
     site_power_mw: float = 5.0         # per-site cap (detectability tier)
-    fine_split: bool = False           # Precision of optimal_split grid: coarse 13-point default, or every 1%
 
     def build(self, n_train_gpus, n_inf_gpus):
         # Trainer: whole train_gpus_per_node-GPU replica nodes, or ONE right-sized node (<= that) when
@@ -390,37 +389,17 @@ def total_time(cfg, n_train_gpus, n_inf_gpus):
     return n_steps(cfg) * r.t_step, r
 
 
-def rightsize_trainer(cfg, n_inf_gpus):
-    """Min trainer GPUs for this inference allocation: enough to (a) hold a full replica in ONE node
-    and (b) keep update off the critical path (t_update <= max(rollout+verify, broadcast)). Rollout
-    and broadcast don't depend on trainer size, so probe once. Returns (n_train_gpus, probe_result)."""
-    r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf_gpus))
-    per_gpu_hbm = r.scenario.train_hw.node_hbm / r.scenario.train_hw.gpus_per_node
-    mem_floor = math.ceil(r.mem.total / per_gpu_hbm)              # replica + resident activation, one node
-    t_other = max(r.stages["rollout+verify"], r.t_bc)
-    per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train        # trainer per-GPU effective FLOP/s
-    if t_other > 0 and math.isfinite(t_other) and per_gpu_flops > 0:
-        upd_floor = math.ceil(r.tc.c_update / (per_gpu_flops * t_other))
-    else:
-        upd_floor = mem_floor
-    need = max(mem_floor, upd_floor)
-    return -(-need // GPU_STEP) * GPU_STEP, r            # round up to a whole GPU_STEP
-
-
-# The solver searches INFERENCE GPUs directly (trainer right-sized to each via rightsize_trainer).
-# Two monotone facts make every search an exact bisection AND keep the reported GPU count self-
-# consistent (re-deriving at that count reproduces the same wall):
-#   - total(n_inf) = trainer(n_inf) + n_inf is INCREASING in n_inf (more inference -> smaller rollout
-#     -> larger update floor -> larger right-sized trainer), so "max inference within a GPU budget"
-#     is one bisection;
-#   - wall(n_inf) is NON-INCREASING in n_inf (more inference -> faster rollout, until the broadcast
-#     floor), so "min inference to hit a window" is another. The trainer is always kept just off the
-#     critical path, so the trainer:inference balance falls out of these two rather than a frac grid.
-def _alloc(cfg, n_inf_gpus):
-    """(wall-clock, result, total_gpus) for an inference allocation with the trainer right-sized."""
-    tg, _ = rightsize_trainer(cfg, n_inf_gpus)
-    tt, r = total_time(cfg, tg, n_inf_gpus)
-    return tt, r, (gpus_of(r) if r is not None else float("inf"))
+# ONE sizing routine underpins BOTH solvers, so they can never disagree: given a per-step time budget
+# tsb, size each stage to the SMALLEST hardware that fits it. Rollout and update overlap (t_step = max
+# of stages), so the two are sized INDEPENDENTLY against tsb -- crucially this admits UPDATE-BOUND
+# splits (update only has to beat tsb, not beat rollout). A search that instead walked the "trainer
+# matched to rollout" curve cannot reach those, and at a wave-count jump in rollout(n_inf) -- where
+# matching the suddenly-faster rollout demands a much bigger trainer -- it gets priced out of budget
+# and retreats to a far slower point. Sizing against tsb sidesteps that entirely.
+#   min_cluster(window)  = min_gpus_for_tsb(window / n_steps)          -- min GPUs to hit a window
+#   optimal_split(budget) = smallest tsb whose min_gpus_for_tsb fits   -- min wall within a budget
+# TSB_TOL is the relative convergence tolerance for that outer time bisection.
+TSB_TOL = 1e-4
 
 
 def _pack(tt, r):
@@ -428,42 +407,20 @@ def _pack(tt, r):
             (gpus_of(r) - r.scenario.inf_hw.n_nodes * r.scenario.inf_hw.gpus_per_node) / gpus_of(r))
 
 
-def optimal_split(cfg, total_gpus, fracs=None):
-    """Min-wall allocation whose trainer+inference fits total_gpus: the LARGEST inference the budget
-    affords (trainer right-sized on top), found by bisection since total(n_inf) is monotone. Returns
-    (time, n_train_nodes, n_inf_nodes, r, train_frac). `fracs` is accepted but unused (exact search)."""
+def min_gpus_for_tsb(cfg, tsb, budget=None):
+    """Smallest (trainer, inference) GPU counts whose EVERY stage fits the per-step budget tsb.
+    Inference: min GPUs with rollout+verify <= tsb (bisection; rollout falls with inference).
+    Trainer:   min GPUs with update <= tsb, floored at the replica's one-node memory fit.
+    Returns dict(n_train, n_inf, gpus, tt, r) or None if tsb is unreachable inside `budget`
+    (defaults to cfg.stock_gpus) -- e.g. the broadcast floor alone already exceeds tsb."""
     step = GPU_STEP
-    if _alloc(cfg, step)[2] > total_gpus:            # can't afford the smallest inference node + its trainer
-        return (float("inf"), 1, 1, None, 0.0)
-    lo, hi = step, (total_gpus // step) * step        # inference can't exceed the budget
-    while hi - lo > step:                             # largest n_inf with total(n_inf) <= budget
-        mid = max(lo + step, (((lo + hi) // 2) // step) * step)
-        if _alloc(cfg, mid)[2] <= total_gpus:
-            lo = mid
-        else:
-            hi = mid
-    tt, r, _ = _alloc(cfg, lo)
-    return _pack(tt, r) if r is not None else (float("inf"), 1, 1, None, 0.0)
-
-
-def min_cluster(cfg, target_s):
-    """Smallest total GPU count finishing within target_s, capped by the stock. Sizes EACH stage to
-    the per-step time budget tsb = target_s / n_steps INDEPENDENTLY (rollout and update overlap, so
-    t_step = max of stages): min inference with rollout+verify <= tsb, and the SMALLEST trainer with
-    update <= tsb (floored at the replica's memory fit). So a loose window lets the trainer downsize
-    to the memory floor instead of needlessly matching a fast rollout -- the same downsizing in the
-    centralised (big-inference-node) case as the decentralised one. Returns dict or None (infeasible
-    even at the full stock)."""
-    step = GPU_STEP
-    steps = n_steps(cfg)
-    if not (math.isfinite(steps) and steps > 0):
-        return None
-    tsb = target_s / steps                              # per-step time budget
+    stock = cfg.stock_gpus if budget is None else budget
     per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train
-    stock = cfg.stock_gpus
-    r16 = lambda x: -(-int(math.ceil(x)) // step) * step  # round up to a whole GPU_STEP
+    r16 = lambda x: -(-int(math.ceil(x)) // step) * step   # round up to a whole GPU_STEP
+    if not (tsb > 0 and math.isfinite(tsb)):
+        return None
 
-    def probe(n_inf):                                    # stage times at this inference (trainer-independent)
+    def probe(n_inf):                                      # stage times here are trainer-independent
         r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf))
         if not r.ro.model_fits:
             return None
@@ -472,15 +429,18 @@ def min_cluster(cfg, target_s):
                     mem_floor=r16(r.mem.total / pgh), c_update=r.tc.c_update)
 
     p0 = probe(step)
-    if p0 is None or p0["bc"] > tsb:                     # broadcast wall: no GPU count can beat it
+    if p0 is None or p0["bc"] > tsb:                       # broadcast floor alone busts the budget
         return None
-    max_inf = ((stock - p0["mem_floor"]) // step) * step  # leave room for at least the memory-floor trainer
-    if max_inf < step or probe(max_inf)["roll"] > tsb:
-        return None                                     # even max inference can't get rollout under budget
+    max_inf = ((stock - p0["mem_floor"]) // step) * step   # leave room for at least a memory-floor trainer
+    if max_inf < step:
+        return None
+    pmax = probe(max_inf)
+    if pmax is None or pmax["roll"] > tsb:
+        return None                                        # even max inference can't get rollout under tsb
     if p0["roll"] <= tsb:
         n_inf = step
     else:
-        lo, hi = step, max_inf                           # lo fails, hi fits; rollout decreases with n_inf
+        lo, hi = step, max_inf                             # lo fails, hi fits
         while hi - lo > step:
             mid = max(lo + step, (((lo + hi) // 2) // step) * step)
             if probe(mid)["roll"] <= tsb:
@@ -489,15 +449,57 @@ def min_cluster(cfg, target_s):
                 lo = mid
         n_inf = hi
     p = probe(n_inf)
-    upd_floor = r16(p["c_update"] / (per_gpu_flops * tsb)) if tsb > 0 else p["mem_floor"]
-    n_train = max(p["mem_floor"], upd_floor)             # smallest trainer with update <= tsb, replica fits
+    n_train = max(p["mem_floor"], r16(p["c_update"] / (per_gpu_flops * tsb)))
     if n_train + n_inf > stock:
         return None
     tt, r = total_time(cfg, n_train, n_inf)
     if r is None:
         return None
-    g = gpus_of(r)
-    return dict(gpus=g, nt=r.scenario.train_hw.n_nodes, ni=r.scenario.inf_hw.n_nodes, tt=tt, r=r,
+    return dict(n_train=n_train, n_inf=n_inf, gpus=gpus_of(r), tt=tt, r=r)
+
+
+def optimal_split(cfg, total_gpus, fracs=None):
+    """Min-wall allocation fitting total_gpus: binary-search the smallest per-step budget tsb whose
+    min_gpus_for_tsb() still fits. Searches the full (trainer, inference) space via tsb -- update-bound
+    splits included -- so it no longer retreats to a slower point when a wave-count jump prices a
+    rollout-matched trainer out of budget. Returns (time, n_train_nodes, n_inf_nodes, r, train_frac).
+    `fracs` is accepted but unused: the split is derived exactly, not swept over a preset grid."""
+    steps = n_steps(cfg)
+    if not (math.isfinite(steps) and steps > 0):
+        return (float("inf"), 1, 1, None, 0.0)
+    # Upper bound: the cheapest viable cluster (smallest inference + its memory-floor trainer). Its
+    # per-step time is reachable by definition, so it seeds the bisection's "fits" end.
+    seed = simulate(cfg.build(cfg.train_gpus_per_node, GPU_STEP))
+    if not seed.ro.model_fits:
+        return (float("inf"), 1, 1, None, 0.0)
+    hi = seed.t_step
+    best = min_gpus_for_tsb(cfg, hi, budget=total_gpus)
+    if best is None:
+        return (float("inf"), 1, 1, None, 0.0)             # can't even afford the cheapest cluster
+    lo = 0.0
+    while hi - lo > max(hi * TSB_TOL, 1e-9):
+        mid = 0.5 * (lo + hi)
+        sol = min_gpus_for_tsb(cfg, mid, budget=total_gpus)
+        if sol is not None:
+            hi, best = mid, sol
+        else:
+            lo = mid
+    return _pack(best["tt"], best["r"])
+
+
+def min_cluster(cfg, target_s):
+    """Smallest total GPU count finishing within target_s, capped by the stock -- i.e. the minimum
+    hardware whose every stage fits the window's per-step budget. Returns dict or None (infeasible
+    even at the full stock)."""
+    steps = n_steps(cfg)
+    if not (math.isfinite(steps) and steps > 0):
+        return None
+    sol = min_gpus_for_tsb(cfg, target_s / steps)
+    if sol is None:
+        return None
+    r, g = sol["r"], sol["gpus"]
+    return dict(gpus=g, nt=r.scenario.train_hw.n_nodes, ni=r.scenario.inf_hw.n_nodes,
+                tt=sol["tt"], r=r,
                 frac=(g - r.scenario.inf_hw.n_nodes * r.scenario.inf_hw.gpus_per_node) / g)
 
 
@@ -554,9 +556,8 @@ def required_bcast_mbps(cfg, window_s):
 
     Solved with the broadcast effectively FREE (BCAST_FREE_MBPS): evaluate() picks the min-hardware
     allocation and its compute-stage times WITHOUT the current link or compression influencing them
-    (otherwise the metric is circular -- a slow link slackens the trainer via rightsize_trainer, which
-    would report a LOWER requirement -- and drifts with the compression knob via the same operating-
-    point coupling). The requirement is then set purely by the compute stages the broadcast overlaps.
+    (otherwise the metric is circular -- a slow link slackens the trainer, which would report a LOWER
+    requirement -- and drifts with the compression knob via the same operating-point coupling). The requirement is then set purely by the compute stages the broadcast overlaps.
 
     Broadcast overlaps the WHOLE step (>=1-step off-policy: concurrent with the next step's generation
     AND update), so per model.py's t_step = max(gen, update, bcast) it is hidden iff it fits under the
@@ -706,5 +707,4 @@ def config_lines(cfg):
         f"gpu_hr_usd: ${cfg.gpu_hr_usd:g}",
         f"stock_gpus: {cfg.stock_gpus:,}",
         f"site_power_mw: {cfg.site_power_mw:g}",
-        f"split_search: {'fine (1% grid)' if cfg.fine_split else 'coarse (13-point grid)'}",
     ]

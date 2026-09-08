@@ -528,12 +528,19 @@ INF_NODE_LABEL = {n: (f"{n}\n(NVL72)" if n == 72 else str(n)) for n in INF_NODE_
 _LBL2NODE = {v: k for k, v in INF_NODE_LABEL.items()}
 DC_NODE_FIX = dict(wan_mbps=CEN["wan_mbps"], compression=CEN["compression"])   # centralised fabric; isolate node size
 _GROK3_BOV = _batch_ov("Grok-3-Reasoning")                                     # hold Grok-3's batch across the sweep
+# Stock for the 2r node-size sweep. Under model.py's <=4-way sequence sharding, decode stays memory-
+# bound (weight streaming, t_dec_mem ~ 1/gpus_per_node) rather than over-packing into compute, so max
+# compute rises MONOTONICALLY with node size (bigger NVLink domain -> faster per-node weight streaming).
+# At this 100k stock the largest nodes (>=64) PLATEAU -- the 4x sharding wants more inference nodes than
+# 100k affords; the full 1.5M stock lets them keep climbing (raise this to see that).
+NODE_SWEEP_STOCK = 100_000
 
 dc_node_maxc = grouped_bars([INF_NODE_LABEL[n] for n in INF_NODE_SWEEP], [("180d", PAL[2])],
                             lambda cat, s: max_c_rl_at_stock(_with(base, gpus_per_node=_LBL2NODE[cat], **DC_NODE_FIX),
-                                                             base.stock_gpus, DC_WIN_S),
-                            f"2r. Max achievable RL compute vs inference node size (full {_fn(base.stock_gpus)}-GPU stock, "
-                            f"180d, 1Tbps, {DC_COMP:g}x). Bigger NVLink domain -> lower decode floor -> more compute",
+                                                             NODE_SWEEP_STOCK, DC_WIN_S),
+                            f"2r. Max achievable RL compute vs inference node size ({_fn(NODE_SWEEP_STOCK)}-GPU stock, "
+                            f"180d, 1Tbps, {DC_COMP:g}x). Bigger NVLink domain -> faster weight streaming -> more compute "
+                            f"(monotonic under 4-way seq sharding); top nodes plateau (stock-limited at 100k)",
                             ylab="max achievable RL compute (FLOP)",
                             annotfn=lambda cat, s: "no-fit", labelfn=fmt_sci,
                             hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
