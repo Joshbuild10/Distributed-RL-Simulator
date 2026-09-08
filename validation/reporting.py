@@ -79,7 +79,7 @@ def report(r: SimResult) -> None:
     print("=" * W)
 
     print("\n-- MODEL / ATTENTION SIGNIFICANCE " + "-" * 44)
-    print(f"  P_total {m.p_total/1e9:.1f}B | P_active(layers) {m.p_active_layers/1e9:.1f}B "
+    print(f"  P_total {m.p_total/1e9:.1f}B | P_active(layers) {m.p_active/1e9:.1f}B "
           f"| head {m.p_head/1e9:.2f}B | embed {m.p_embed/1e9:.2f}B")
     print(f"  attention hits 20% of layer FLOPs at T ~ {m.attn_significance_T(0.20):,.0f} tok;"
           f" parity at T ~ {m.attn_significance_T(1.0):,.0f}")

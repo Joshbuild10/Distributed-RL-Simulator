@@ -27,7 +27,20 @@ KNOWN FIRST-CUT BIASES (documented; do not read absolutes as final):
   * MoE decode-memory: handled in model.py (mem_weights_decode) -- decode bandwidth reads the
     active path (p_active_layers + head); HBM CAPACITY still holds all experts (p_total);
     KV-cache traffic stays dense (all layers). inf_bw_mult is a pure HBM-bandwidth knob.
-  * No training-side FSDP penalty (A-ii): penalty_para=1.0 (update optimistic at high shard).
+  * penalty_para=1.0 (A-ii): INTER-node throughput loss under sharding, held at 1 -- the update runs
+    on co-located replica nodes (fast intra-node interconnect) and at these bandwidths the inter-node
+    loss is negligible; it would NOT hold for a WAN-sharded learner (unmodelled term). Broadcast to
+    the remote INFERENCE sites IS charged (net.*).
+  * Trainer node model: each update node holds a FULL model REPLICA (intra-node shard only, no cross-
+    node model parallelism); multiple trainer nodes are DATA-PARALLEL replicas. Nodes are up to
+    train_gpus_per_node (128) GPUs; a SINGLE trainer node is right-sized DOWN (rightsize_trainer) to
+    the min GPUs that (a) fit the replica + resident activation in ONE node and (b) keep update off
+    the critical path. The solver ENFORCES the full mem.fits (replica + activation <= one node's HBM),
+    so a node too small for the replica is no-fit (would need the disallowed cross-node parallelism).
+    act_site_parallel=True: activation is sequence/tensor-parallel sharded WITHIN the node (does not
+    scale with node size); the data-parallel per-GPU path (act_site_parallel=False) is kept for the
+    calibrated validation presets. Not yet modelled (would only tighten): largest gathered FSDP unit,
+    collective/workspace buffers, master-copy dtype.
   * Off-policy staleness (A-iii): `sync_interval` (k) now models the DiLoCo/async_level relaxation
     -- k=0 on-policy (serial), k=1 one-step off-policy (overlapped, default), k>=2 broadcasts every
     k steps (per-step broadcast /k). Its BENEFIT only: the sample-efficiency cost of staleness is
@@ -66,6 +79,11 @@ GPUS = {
 # capacity, so a table reading left-to-right tracks the axis that actually binds rollout.
 HIGH_END_GPUS = ("A100", "H100", "H200", "B200", "B300", "GB200", "GB300", "MI355X")
 GB, TB = 1e9, 1e12
+
+# Granularity (and minimum) for right-sizing BOTH pools: trainer replica nodes and single inference
+# nodes downsize in whole GPU_STEP chunks (16 = a good-topology unit), never to an arbitrary count.
+# Bump this if a coarser/finer allocation grain is wanted.
+GPU_STEP = 16
 
 
 def node_hw(gpu, g=8):
@@ -218,18 +236,20 @@ def target_batch_iso(name):
 # Its p_total/active (2.4T/104B) are given. If K3 uses MLA the GQA KV term over-counts KV.
 # ---------------------------------------------------------------------------
 MODELS = {
-    "Llama3-8B":       ModelSpec(name="Llama-3.1-8B", is_moe=False, p_total=8.03e9, p_active_layers=7.0e9,
+    "Llama3-8B":       ModelSpec(name="Llama-3.1-8B", is_moe=False, p_total=8.03e9, p_active=7.0e9,
                                  d_model=4096, n_layers=32, n_q_heads=32, n_kv_heads=8, head_dim=128, vocab=128256),
-    "Llama3-70B":      ModelSpec(name="Llama-3.1-70B", is_moe=False, p_total=70.6e9, p_active_layers=68.5e9,
+    "Llama3-70B":      ModelSpec(name="Llama-3.1-70B", is_moe=False, p_total=70.6e9, p_active=68.5e9,
                                  d_model=8192, n_layers=80, n_q_heads=64, n_kv_heads=8, head_dim=128, vocab=128256),
-    "Llama3-405B":     ModelSpec(name="Llama-3.1-405B", is_moe=False, p_total=405e9, p_active_layers=401e9,
+    "Llama3-405B":     ModelSpec(name="Llama-3.1-405B", is_moe=False, p_total=405e9, p_active=401e9,
                                  d_model=16384, n_layers=126, n_q_heads=128, n_kv_heads=8, head_dim=128, vocab=128256),
-    "Qwen3-30B-A3B":   ModelSpec(name="Qwen3-30B-A3B (MoE)", is_moe=True, p_total=30.5e9, p_active_layers=3.3e9,
+    "Qwen3-30B-A3B":   ModelSpec(name="Qwen3-30B-A3B (MoE)", is_moe=True, p_total=30.5e9, p_active=3.3e9,
                                  d_model=2048, n_layers=48, n_q_heads=32, n_kv_heads=4, head_dim=128, vocab=151936),
-    "Qwen3-235B-A22B": ModelSpec(name="Qwen3-235B-A22B (MoE)", is_moe=True, p_total=235e9, p_active_layers=22e9,
+    "Qwen3-235B-A22B": ModelSpec(name="Qwen3-235B-A22B (MoE)", is_moe=True, p_total=235e9, p_active=22e9,
                                  d_model=4096, n_layers=94, n_q_heads=64, n_kv_heads=4, head_dim=128, vocab=151936),
-    "Kimi-K3":         ModelSpec(name="Kimi-K3 (MoE, EST arch)", is_moe=True, p_total=2.4e12, p_active_layers=104e9,
+    "Kimi-K3":         ModelSpec(name="Kimi-K3 (MoE, EST arch)", is_moe=True, p_total=2.4e12, p_active=104e9,
                                  d_model=7168, n_layers=90, n_q_heads=128, n_kv_heads=8, head_dim=128, vocab=163840),
+    "Llama4-402B-A17B": ModelSpec(name="Llama4-402B-A17B", is_moe=True, p_total=400e9, p_active=17e9,
+                                     d_model=5120, n_layers=48, n_q_heads=40, n_kv_heads=8, head_dim=128, vocab=202048),
 }
 # DEFAULT feasibility model = Qwen3-235B-A22B (an open, frontier-relevant MoE we have measured E[R] for).
 DEFAULT_MODEL = "Llama3-405B"
@@ -257,10 +277,11 @@ class FeasConfig:
     target_c_rl: float
     # Hardware
     gpu: str = "H100"
-    gpus_per_node: int = 16             # Should at most 72 for NVLink shared memory/bandwidth capacity.
+    gpus_per_node: int = 16             # Inference node
+    train_gpus_per_node: int = 128      # Update node (holds a full model replica). Single nodes are resized DOWN to the min GPUs that fit the replica
     wan_mbps: float = 1000.0
-    compression: float = 16.0          # weight-sync compression (A-iii stand-in): int4~4x x sparsify/sync
-    sync_interval: float = 1         # Off-policy staleness degree k
+    compression: float = 16.0           # weight-sync compression.
+    sync_interval: float = 1            # Off-policy staleness degree k
 
     # RL run config (per-step compute)
     model: ModelSpec = field(default_factory=lambda: MODELS[DEFAULT_MODEL])
@@ -269,7 +290,7 @@ class FeasConfig:
     prompt_len: int = 1000
     er: float = 20_000.0                # E[R]. Slightly conservative long-context default for Qwen3-235B
     er_cv: float = 0.5
-    omega: float = 1.5
+    omega: float = 1.5                  # Oversampling/filtering degree
     b_optimiser: float = 4.0            # Muon optimiser
     mfu_train: float = 0.40
     mfu_inf: float = 0.3
@@ -285,15 +306,31 @@ class FeasConfig:
     site_power_mw: float = 5.0         # per-site cap (detectability tier)
     fine_split: bool = False           # Precision of optimal_split grid: coarse 13-point default, or every 1%
 
-    def build(self, n_train, n_inf):
-        nh = node_hw(self.gpu, self.gpus_per_node)
-        train_nh = dict(nh); train_nh["node_hbm"] = nh["node_hbm"] * self.hbm_mult
-        inf_nh = dict(nh)
-        inf_nh["node_bw"] = nh["node_bw"] * self.inf_bw_mult
-        inf_nh["node_flops"] = nh["node_flops"] * self.inf_flop_mult
-        inf_nh["node_hbm"] = nh["node_hbm"] * self.hbm_mult
+    def build(self, n_train_gpus, n_inf_gpus):
+        # Trainer: whole train_gpus_per_node-GPU replica nodes, or ONE right-sized node (<= that) when
+        # a single node suffices. n_shard = the node's own GPUs -> each node holds a full replica.
+        tnode_max = self.train_gpus_per_node
+        n_train_gpus = max(1, int(n_train_gpus))
+        if n_train_gpus <= tnode_max:
+            train_node, n_train_nodes = n_train_gpus, 1
+        else:
+            n_train_nodes = -(-n_train_gpus // tnode_max); train_node = tnode_max
+        # Inference: whole gpus_per_node nodes, or ONE downsized node (>= GPU_STEP, <= gpus_per_node)
+        # when a single node suffices -- so a big centralised (e.g. NVL72) node isn't forced to spend
+        # all 72 GPUs when fewer keep rollout off the critical path.
+        inode_max = self.gpus_per_node
+        n_inf_gpus = max(GPU_STEP, int(n_inf_gpus))
+        if n_inf_gpus <= inode_max:
+            inode, n_inf_nodes = n_inf_gpus, 1
+        else:
+            n_inf_nodes = -(-n_inf_gpus // inode_max); inode = inode_max
+        train_nh = node_hw(self.gpu, train_node); train_nh["node_hbm"] *= self.hbm_mult
+        inf_nh = node_hw(self.gpu, inode)
+        inf_nh["node_bw"] *= self.inf_bw_mult
+        inf_nh["node_flops"] *= self.inf_flop_mult
+        inf_nh["node_hbm"] *= self.hbm_mult
         return Scenario(
-            name=f"{self.gpu} train {n_train:,}/inf {n_inf:,}",
+            name=f"{self.gpu} train {n_train_nodes * train_node:,}/inf {n_inf_nodes * inode:,}",
             model=self.model,
             rl=RLSpec(prompts_per_batch=self.prompts_per_batch,
                       responses_per_prompt=self.responses_per_prompt, prompt_len=self.prompt_len,
@@ -303,10 +340,11 @@ class FeasConfig:
             algo=AlgoSpec(b_optimiser=self.b_optimiser, recomp_act=1, recomp_old=0, opt_steps=1,
                           compression_ratio=self.compression,
                           sync_interval=self.sync_interval,   # k>=1 => overlapped (max); k=0 => serial (sum)
-                          b_weights_inf=self.b_weights_inf, b_kv=self.b_kv),
-            train_hw=HWSpec("trainer", n_nodes=n_train, gpus_per_node=self.gpus_per_node,
-                            mfu=self.mfu_train, penalty_para=1.0, n_shard=n_train * self.gpus_per_node, **train_nh),
-            inf_hw=HWSpec("inference", n_nodes=n_inf, gpus_per_node=self.gpus_per_node,
+                          b_weights_inf=self.b_weights_inf, b_kv=self.b_kv,
+                          act_site_parallel=True),   # replica node: activation SP-sharded within the node
+            train_hw=HWSpec("trainer", n_nodes=n_train_nodes, gpus_per_node=train_node,
+                            mfu=self.mfu_train, penalty_para=1.0, n_shard=train_node, **train_nh),
+            inf_hw=HWSpec("inference", n_nodes=n_inf_nodes, gpus_per_node=inode,
                           mfu=self.mfu_inf, bw_eff=0.85, **inf_nh),
             net=NetSpec(bandwidth=self.wan_mbps * 1e6 / 8, latency=0.5),
             verify=VerifySpec(mode="rule", seconds_per_rollout=0.5, n_verifier_workers=10000),
@@ -331,83 +369,143 @@ def n_steps(cfg):
     return cfg.target_c_rl / per_step_flop(cfg)
 
 
-def total_time(cfg, n_train, n_inf):
-    """Wall-clock to finish; inf if the config can't run (weights don't fit a node ->
-    the model can't shard inference, so simulate() would NaN)."""
+def gpus_of(r):
+    """Total GPUs allocated in a simulate result (asymmetric train/inference node sizes)."""
+    s = r.scenario
+    return s.train_hw.n_nodes * s.train_hw.gpus_per_node + s.inf_hw.n_nodes * s.inf_hw.gpus_per_node
+
+
+def total_time(cfg, n_train_gpus, n_inf_gpus):
+    """Wall-clock to finish; inf if the config can't run:
+      - inference weights don't fit a node (ro.model_fits) -> can't shard inference, simulate() NaNs;
+      - a replica + resident activation doesn't fit ONE trainer node (mem.fits) -> would need cross-node
+        model parallelism, which this model disallows, so the config is inadmissible."""
     try:
-        r = simulate(cfg.build(n_train, n_inf))
+        r = simulate(cfg.build(n_train_gpus, n_inf_gpus))
     except (ValueError, ZeroDivisionError, OverflowError):
         return float("inf"), None
-    if r is None or not math.isfinite(r.t_step) or r.t_step <= 0 or not r.ro.model_fits:
+    if (r is None or not math.isfinite(r.t_step) or r.t_step <= 0
+            or not r.ro.model_fits or not r.mem.fits):
         return float("inf"), r
     return n_steps(cfg) * r.t_step, r
 
 
-# wall-clock(frac) is the max of one INCREASING function (rollout+verify, fewer inf nodes as frac
-# rises) and one DECREASING function (update, more train nodes), plus a frac-independent constant
-# (broadcast) -- generically unimodal, but integer node-count/wave-count rounding can put small
-# non-monotonic wiggles in it, so both grids are brute-force sweeps rather than a bisection/ternary
-# search (which could lock onto a local wiggle instead of the true optimum).
-#
-# COARSE (default): 13 hand-picked points, denser near the low/typical-training-share end where the
-# optimum usually sits. ~13x fewer simulate() calls than FINE, so this is what every sweep uses by
-# default (a full CLI run stays in the ~seconds-to-tens-of-seconds range).
-# FINE (FeasConfig.fine_split=True / --fine-split): every integer percent, 1%..99%. Found genuine
-# multi-percent-point differences vs COARSE in practice (e.g. one Grok-4 window needed 14% fewer
-# GPUs at the true optimum than the coarse grid reported) -- worth it when the split fraction or
-# GPU count itself is the number you're about to quote, not just when the story is directional.
-SPLIT_FRACS_COARSE = (0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.33, 0.50, 0.66, 0.75, 0.80, 0.95, 0.99)
-SPLIT_FRACS_FINE = tuple(p / 100 for p in range(1, 100))
+def rightsize_trainer(cfg, n_inf_gpus):
+    """Min trainer GPUs for this inference allocation: enough to (a) hold a full replica in ONE node
+    and (b) keep update off the critical path (t_update <= max(rollout+verify, broadcast)). Rollout
+    and broadcast don't depend on trainer size, so probe once. Returns (n_train_gpus, probe_result)."""
+    r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf_gpus))
+    per_gpu_hbm = r.scenario.train_hw.node_hbm / r.scenario.train_hw.gpus_per_node
+    mem_floor = math.ceil(r.mem.total / per_gpu_hbm)              # replica + resident activation, one node
+    t_other = max(r.stages["rollout+verify"], r.t_bc)
+    per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train        # trainer per-GPU effective FLOP/s
+    if t_other > 0 and math.isfinite(t_other) and per_gpu_flops > 0:
+        upd_floor = math.ceil(r.tc.c_update / (per_gpu_flops * t_other))
+    else:
+        upd_floor = mem_floor
+    need = max(mem_floor, upd_floor)
+    return -(-need // GPU_STEP) * GPU_STEP, r            # round up to a whole GPU_STEP
 
 
-def optimal_split(cfg, n_total, fracs=None):
-    """Trainer fraction of n_total that minimises wall-clock. Returns (time, n_train, n_inf, r, frac).
-    Grid defaults to cfg.fine_split (COARSE unless set); pass `fracs=` explicitly to override either."""
-    if fracs is None:
-        fracs = SPLIT_FRACS_FINE if cfg.fine_split else SPLIT_FRACS_COARSE
-    best = None
-    for f in fracs:
-        nt = max(1, int(n_total * f)); ni = max(1, n_total - nt)
-        tt, r = total_time(cfg, nt, ni)
-        if best is None or tt < best[0]:
-            best = (tt, nt, ni, r, f)
-    return best
+# The solver searches INFERENCE GPUs directly (trainer right-sized to each via rightsize_trainer).
+# Two monotone facts make every search an exact bisection AND keep the reported GPU count self-
+# consistent (re-deriving at that count reproduces the same wall):
+#   - total(n_inf) = trainer(n_inf) + n_inf is INCREASING in n_inf (more inference -> smaller rollout
+#     -> larger update floor -> larger right-sized trainer), so "max inference within a GPU budget"
+#     is one bisection;
+#   - wall(n_inf) is NON-INCREASING in n_inf (more inference -> faster rollout, until the broadcast
+#     floor), so "min inference to hit a window" is another. The trainer is always kept just off the
+#     critical path, so the trainer:inference balance falls out of these two rather than a frac grid.
+def _alloc(cfg, n_inf_gpus):
+    """(wall-clock, result, total_gpus) for an inference allocation with the trainer right-sized."""
+    tg, _ = rightsize_trainer(cfg, n_inf_gpus)
+    tt, r = total_time(cfg, tg, n_inf_gpus)
+    return tt, r, (gpus_of(r) if r is not None else float("inf"))
+
+
+def _pack(tt, r):
+    return (tt, r.scenario.train_hw.n_nodes, r.scenario.inf_hw.n_nodes, r,
+            (gpus_of(r) - r.scenario.inf_hw.n_nodes * r.scenario.inf_hw.gpus_per_node) / gpus_of(r))
+
+
+def optimal_split(cfg, total_gpus, fracs=None):
+    """Min-wall allocation whose trainer+inference fits total_gpus: the LARGEST inference the budget
+    affords (trainer right-sized on top), found by bisection since total(n_inf) is monotone. Returns
+    (time, n_train_nodes, n_inf_nodes, r, train_frac). `fracs` is accepted but unused (exact search)."""
+    step = GPU_STEP
+    if _alloc(cfg, step)[2] > total_gpus:            # can't afford the smallest inference node + its trainer
+        return (float("inf"), 1, 1, None, 0.0)
+    lo, hi = step, (total_gpus // step) * step        # inference can't exceed the budget
+    while hi - lo > step:                             # largest n_inf with total(n_inf) <= budget
+        mid = max(lo + step, (((lo + hi) // 2) // step) * step)
+        if _alloc(cfg, mid)[2] <= total_gpus:
+            lo = mid
+        else:
+            hi = mid
+    tt, r, _ = _alloc(cfg, lo)
+    return _pack(tt, r) if r is not None else (float("inf"), 1, 1, None, 0.0)
 
 
 def min_cluster(cfg, target_s):
-    """Smallest node count (with optimal split) finishing within target_s, capped by the stock.
-    Wall-clock is ~monotone decreasing in N, so: exponential-bracket the crossover, then BISECT
-    for the tight minimum. Returns dict or None (infeasible even at the full stock)."""
-    max_nodes = cfg.stock_gpus // cfg.gpus_per_node
-    floor = 2   # true minimum: 1 trainer node + 1 inference node (optimal_split floors each side at 1)
-    if max_nodes < floor:
+    """Smallest total GPU count finishing within target_s, capped by the stock. Sizes EACH stage to
+    the per-step time budget tsb = target_s / n_steps INDEPENDENTLY (rollout and update overlap, so
+    t_step = max of stages): min inference with rollout+verify <= tsb, and the SMALLEST trainer with
+    update <= tsb (floored at the replica's memory fit). So a loose window lets the trainer downsize
+    to the memory floor instead of needlessly matching a fast rollout -- the same downsizing in the
+    centralised (big-inference-node) case as the decentralised one. Returns dict or None (infeasible
+    even at the full stock)."""
+    step = GPU_STEP
+    steps = n_steps(cfg)
+    if not (math.isfinite(steps) and steps > 0):
         return None
-    wall = lambda N: optimal_split(cfg, N)[0]
-    if wall(max_nodes) > target_s:
-        return None                              # can't finish in the window even with the whole stock
-    if wall(floor) <= target_s:
-        N = floor                                # floor already fits; can't go smaller in this framework
+    tsb = target_s / steps                              # per-step time budget
+    per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train
+    stock = cfg.stock_gpus
+    r16 = lambda x: -(-int(math.ceil(x)) // step) * step  # round up to a whole GPU_STEP
+
+    def probe(n_inf):                                    # stage times at this inference (trainer-independent)
+        r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf))
+        if not r.ro.model_fits:
+            return None
+        pgh = r.scenario.train_hw.node_hbm / r.scenario.train_hw.gpus_per_node
+        return dict(roll=r.stages["rollout+verify"], bc=r.t_bc,
+                    mem_floor=r16(r.mem.total / pgh), c_update=r.tc.c_update)
+
+    p0 = probe(step)
+    if p0 is None or p0["bc"] > tsb:                     # broadcast wall: no GPU count can beat it
+        return None
+    max_inf = ((stock - p0["mem_floor"]) // step) * step  # leave room for at least the memory-floor trainer
+    if max_inf < step or probe(max_inf)["roll"] > tsb:
+        return None                                     # even max inference can't get rollout under budget
+    if p0["roll"] <= tsb:
+        n_inf = step
     else:
-        lo, hi = floor, floor                    # grow hi until it fits; lo = largest N that still fails
-        while hi < max_nodes and wall(hi) > target_s:
-            lo, hi = hi, min(max_nodes, max(hi + 1, hi * 2))
-        while hi - lo > 1:                        # bisect (lo fails, hi fits) for the smallest fitting N
-            mid = (lo + hi) // 2
-            if wall(mid) <= target_s:
+        lo, hi = step, max_inf                           # lo fails, hi fits; rollout decreases with n_inf
+        while hi - lo > step:
+            mid = max(lo + step, (((lo + hi) // 2) // step) * step)
+            if probe(mid)["roll"] <= tsb:
                 hi = mid
             else:
                 lo = mid
-        N = hi
-    tt, nt, ni, r, f = optimal_split(cfg, N)
-    return dict(N=N, nt=nt, ni=ni, tt=tt, r=r, frac=f)
+        n_inf = hi
+    p = probe(n_inf)
+    upd_floor = r16(p["c_update"] / (per_gpu_flops * tsb)) if tsb > 0 else p["mem_floor"]
+    n_train = max(p["mem_floor"], upd_floor)             # smallest trainer with update <= tsb, replica fits
+    if n_train + n_inf > stock:
+        return None
+    tt, r = total_time(cfg, n_train, n_inf)
+    if r is None:
+        return None
+    g = gpus_of(r)
+    return dict(gpus=g, nt=r.scenario.train_hw.n_nodes, ni=r.scenario.inf_hw.n_nodes, tt=tt, r=r,
+                frac=(g - r.scenario.inf_hw.n_nodes * r.scenario.inf_hw.gpus_per_node) / g)
 
 
 def min_wall_full_stock(cfg):
     """Fastest achievable wall-clock: throw the whole stock at it (optimal split).
     Below the window -> a stock/window limit; above -> the latency wall."""
-    N = cfg.stock_gpus // cfg.gpus_per_node
-    tt, nt, ni, r, f = optimal_split(cfg, N)
-    return dict(N=N, nt=nt, ni=ni, tt=tt, r=r, frac=f)
+    tt, nt, ni, r, f = optimal_split(cfg, cfg.stock_gpus)
+    return dict(gpus=gpus_of(r) if r else cfg.stock_gpus, nt=nt, ni=ni, tt=tt, r=r, frac=f)
 
 
 def evaluate(cfg, window_s):
@@ -421,13 +519,13 @@ def evaluate(cfg, window_s):
     feasible = sol is not None
     if not feasible:
         sol = min_wall_full_stock(cfg)
-    gpus = sol["N"] * cfg.gpus_per_node
+    gpus = sol["gpus"]
     tt, r = sol["tt"], sol["r"]
     runnable = math.isfinite(tt) and r is not None
     cost = gpus * tt / 3600 * cfg.gpu_hr_usd if runnable else float("inf")
     return dict(
         feasible=feasible, runnable=runnable, window_s=window_s,
-        gpus=gpus, N=sol["N"], nt=sol["nt"], ni=sol["ni"], frac=sol["frac"],
+        gpus=gpus, N=sol["nt"] + sol["ni"], nt=sol["nt"], ni=sol["ni"], frac=sol["frac"],
         wall_s=tt, wall_d=(tt / 86400 if runnable else float("inf")),
         cost=cost, bottleneck=(r.bottleneck if r else "no-fit"),
         pct_stock=100 * gpus / cfg.stock_gpus, r=r,
@@ -439,48 +537,48 @@ def evaluate(cfg, window_s):
 
 def cost_of(cfg, sol):
     """Legacy helper (min_cluster-style dict). Prefer evaluate() for new code."""
-    gpus = sol["N"] * cfg.gpus_per_node
+    gpus = sol["gpus"]
     gpu_hrs = gpus * sol["tt"] / 3600
     return gpus, gpu_hrs, gpu_hrs * cfg.gpu_hr_usd
 
 
+# Link speed at which the weight broadcast is definitely NOT a step bottleneck (~1 Pbit/s -- for any
+# model here t_bc collapses to the fixed latency floor). required_bcast_mbps solves the operating
+# point AT this speed so the metric is decoupled from the config's own link and compression.
+BCAST_FREE_MBPS = 1e9
+
+
 def required_bcast_mbps(cfg, window_s):
-    """RAW (1x-compression) link bandwidth in Mbps that the weight broadcast needs in order to
-    stop being the step-time bottleneck, at this config's own operating point.
-    -> (mbps_or_None, ev).
+    """Minimum weight-sync link*compression (Mbps, at 1x compression) for the broadcast to stay
+    hidden -- i.e. NOT become the step-time bottleneck -- at this target/window. -> (mbps_or_None, ev).
 
-    model.py has t_bc = vol_bc/bandwidth + latency, where vol_bc is ALREADY post-compression
-    (= b_weights_inf * p_total / compression). So the break-even wire rate is
-    vol_bc/(t_compute - latency) -- a closed form, no re-solving, and no fixed point from
-    bandwidth feeding back into the optimal split. Multiplying that back up by cfg.compression
-    reports the figure AT 1x, i.e. the uncompressed weight volume over the time budget.
+    Solved with the broadcast effectively FREE (BCAST_FREE_MBPS): evaluate() picks the min-hardware
+    allocation and its compute-stage times WITHOUT the current link or compression influencing them
+    (otherwise the metric is circular -- a slow link slackens the trainer via rightsize_trainer, which
+    would report a LOWER requirement -- and drifts with the compression knob via the same operating-
+    point coupling). The requirement is then set purely by the compute stages the broadcast overlaps.
 
-    Quoted at 1x deliberately: the raw requirement is a property of model size and the time
-    budget alone, so it is stable against the compression knob being retuned, and any real
-    compression factor simply DIVIDES it (int4-at-4x needs a quarter of the quoted rate). The
-    alternative -- quoting the post-compression wire rate -- silently rescales every published
-    figure whenever `compression` changes, which is exactly the kind of drift the rest of this
-    module works to avoid. Callers should say "at 1x" in the label so the division is obvious.
+    Broadcast overlaps the WHOLE step (>=1-step off-policy: concurrent with the next step's generation
+    AND update), so per model.py's t_step = max(gen, update, bcast) it is hidden iff it fits under the
+    SLOWER compute stage: t_compute = max(rollout+verify, update). k>=2 off-policy gives it k steps.
 
-    mbps is None when the model doesn't fit a node, or when the compute stage is already faster
-    than the network's FIXED latency floor -- there no finite bandwidth suffices, which is a real
-    answer rather than an error, so render it as "unbounded", not a gap."""
-    ev = evaluate(cfg, window_s)
+    Returned at 1x (link*compression), compression-INDEPENDENT: the uncompressed weight volume over
+    the time budget, so a real compression factor simply DIVIDES it (int4-at-4x needs a quarter).
+
+    None when the model doesn't fit a node, or when even a free link's fixed latency floor already
+    exceeds the compute budget -- there no finite bandwidth suffices ('unbounded'), a real answer."""
+    ev = evaluate(with_cfg(cfg, wan_mbps=BCAST_FREE_MBPS), window_s)
     if not ev["runnable"]:
         return None, ev
     r = ev["r"]
-    t_compute = max(r.t_update, r.stages["rollout+verify"])
+    t_compute = max(r.t_update, r.stages["rollout+verify"])   # broadcast hides behind the slower stage
     lat = r.scenario.net.latency
-    # Off-policy staleness k>=2 gives the broadcast k compute-steps (not 1) to finish before it binds,
-    # so the break-even wire rate falls by ~k. Mirrors model.py's broadcast divisor exactly (which
-    # floors at 1, so k=0 and k=1 both get a single step's budget): broadcast stops being the
-    # bottleneck once (vol/bw + lat)/max(k,1) <= t_compute, i.e. bw >= vol / (max(k,1)*t_compute - lat).
-    # k defaults to 1, so this is a no-op unless a caller sets a k>=2 sync interval.
-    k = max(r.scenario.algo.sync_interval, 1)
+    k = max(r.scenario.algo.sync_interval, 1)                 # k>=2 amortises the broadcast over k steps
     budget = k * t_compute - lat
     if not (math.isfinite(t_compute) and budget > 0):
         return None, ev
-    return r.vol_bc * cfg.compression * 8 / 1e6 / budget, ev
+    raw_weight_bytes = cfg.b_weights_inf * cfg.model.p_total  # uncompressed broadcast volume (1x)
+    return raw_weight_bytes * 8 / 1e6 / budget, ev
 
 
 # arXiv 2603.12151's largest EMPIRICALLY TESTED rollout batch. No longer a hard bound on the
@@ -517,9 +615,9 @@ def sites_power(cfg, gpus):
     return gpus / gpus_per_site, gpus * w / 1e6   # (n_sites at the cap, total MW)
 
 
-def split_for(cfg, N):
-    """The optimal (n_train, n_inf) at a fixed total node count."""
-    _, nt, ni, _, _ = optimal_split(cfg, N)
+def split_for(cfg, total_gpus):
+    """The optimal (n_train_nodes, n_inf_nodes) at a fixed total GPU budget."""
+    _, nt, ni, _, _ = optimal_split(cfg, total_gpus)
     return nt, ni
 
 
@@ -590,7 +688,8 @@ def config_lines(cfg):
     return [
         f"target_c_rl: {cfg.target_c_rl:.3e} FLOP",
         f"model: {cfg.model.name}",
-        f"gpu: {cfg.gpu} ({cfg.gpus_per_node} GPUs/node)",
+        f"gpu: {cfg.gpu} (inference {cfg.gpus_per_node} GPUs/node, "
+        f"update {cfg.train_gpus_per_node} GPUs/node, full replica per node)",
         f"wan_mbps: {cfg.wan_mbps:g}",
         f"compression: {cfg.compression:g}x",
         f"sync_interval (off-policy k): {cfg.sync_interval:g} "

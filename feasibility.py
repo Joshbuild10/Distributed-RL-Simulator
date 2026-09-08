@@ -32,7 +32,7 @@ from feasibility_core import (
     all_targets, cell_text, config_lines, evaluate, fmt_num, fmt_ratio, fmt_time,
     min_wall_full_stock, model_targets, n_steps, optimal_split, per_step_flop, fmt_rate,
     required_bcast_mbps, sites_power, smallest_fitting_gpu, split_for, total_time, with_cfg, GB,
-    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus,
+    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus, gpus_of,
 )
 
 
@@ -174,8 +174,7 @@ def max_achievable_split(base):
     count (the same property min_cluster's bisection relies on): more nodes never hurt, so the
     max-throughput operating point is always "use the whole stock, split it optimally", never a
     smaller subset."""
-    n_total = base.stock_gpus // base.gpus_per_node
-    return n_total, optimal_split(base, n_total)
+    return optimal_split(base, base.stock_gpus)
 
 
 def max_compute_operating_point(cfg, stock=None):
@@ -202,7 +201,7 @@ def max_compute_operating_point(cfg, stock=None):
     eff = effective_node_gpus(c.gpus_per_node, c.stock_gpus)
     if eff != c.gpus_per_node:
         c = with_cfg(c, gpus_per_node=eff)
-    n_total, sol = max_achievable_split(c)
+    sol = max_achievable_split(c)
     if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
         return None
     tt, nt, ni, r, frac = sol
@@ -219,7 +218,7 @@ def max_compute_operating_point(cfg, stock=None):
     # model-FLOPs convention: strip the recompute coefficient off the training term only (inference
     # is already forward-only, no recompute distinction) -- mirrors model.py's own model_flops calc.
     model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
-    return dict(gpus=n_total * c.gpus_per_node, n_total=n_total, nt=nt, ni=ni, frac=frac,
+    return dict(gpus=gpus_of(r), n_total=nt + ni, nt=nt, ni=ni, frac=frac,
                 t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
                 t_broadcast=r.t_bc, bottleneck=r.bottleneck,
                 mfu_model=model_flops_step / (r.t_step * total_peak),
@@ -581,7 +580,7 @@ def model_sweep(base, target_c_rl=2.5e25, windows_d=(90, 180, 720)):
     for name, m in MODELS.items():
         wt_gb = 2.0 * m.p_total / GB
         gpu = smallest_fitting_gpu(m, base.gpus_per_node)
-        tot_act = f"{m.p_total/1e9:.0f}/{m.p_active_layers/1e9:.0f}"
+        tot_act = f"{m.p_total/1e9:.0f}/{m.p_active/1e9:.0f}"
         if gpu is None:
             print(f"  {name:<18}{tot_act:>13}{wt_gb:>7,.0f}{'--':>6}   weights exceed an 8xB200 node "
                   f"-> multi-node inference TP (not modelled)")
@@ -696,7 +695,12 @@ def sensitivity(base, target_c_rl, window_d=90):
     ev = evaluate(cfg, window_d * 86400)
     if not ev["runnable"]:
         print("\n  (sensitivity: base model does not fit a node)"); return
-    N, base_t = ev["N"], ev["wall_s"]
+    # Hold the operating point's ACTUAL cluster (its trainer + inference GPU counts) FIXED and
+    # perturb the physics lever -> wall-clock change at fixed hardware. base_t == ev's own wall.
+    s = ev["r"].scenario
+    n_train_gpus = s.train_hw.n_nodes * s.train_hw.gpus_per_node
+    n_inf_gpus = s.inf_hw.n_nodes * s.inf_hw.gpus_per_node
+    base_t = ev["wall_s"]
     tag = "min cluster" if ev["feasible"] else "full-stock floor (infeasible in window)"
     print(f"\n{_rule()}\n  SENSITIVITY (A3): {target_c_rl:.1e} at its {window_d}d {tag} "
           f"({ev['gpus']:,} GPUs, tr:inf {fmt_ratio(ev['frac'])}); wall-clock elasticity per lever\n{_rule()}")
@@ -710,16 +714,16 @@ def sensitivity(base, target_c_rl, window_d=90):
         "inference FLOP":  lambda c, k: with_cfg(c, mfu_inf=c.mfu_inf * k),
         "training FLOP":   lambda c, k: with_cfg(c, mfu_train=c.mfu_train * k),
         "E[R] length":     lambda c, k: with_cfg(c, er=c.er * k),
-        "node count":      None,   # handled specially (scale the operating-point split)
+        "GPU budget":      None,   # handled specially (scale both pools at the operating point)
     }
     rows = []
     for name, fn in levers.items():
-        if name == "node count":
-            lo = total_time(cfg, max(1, int(ev["nt"] * 0.5)), max(1, int(ev["ni"] * 0.5)))[0]
-            hi = total_time(cfg, ev["nt"] * 2, ev["ni"] * 2)[0]
+        if name == "GPU budget":
+            lo = total_time(cfg, n_train_gpus * 0.5, n_inf_gpus * 0.5)[0]
+            hi = total_time(cfg, n_train_gpus * 2, n_inf_gpus * 2)[0]
         else:
-            lo = total_time(_c := fn(cfg, 0.5), *split_for(_c, N))[0]
-            hi = total_time(_c := fn(cfg, 2.0), *split_for(_c, N))[0]
+            lo = total_time(fn(cfg, 0.5), n_train_gpus, n_inf_gpus)[0]
+            hi = total_time(fn(cfg, 2.0), n_train_gpus, n_inf_gpus)[0]
         rows.append((name, lo / base_t, hi / base_t, max(lo, hi) / min(lo, hi)))
     for name, lo, hi, swing in sorted(rows, key=lambda x: -x[3]):
         print(f"  {name:<22}{lo:>11.2f}x{hi:>11.2f}x{swing:>8.1f}x")
@@ -875,7 +879,7 @@ def write_models_csv(base, path="experiments/models_feasibility.csv", target_c_r
         for name, m in MODELS.items():
             gpu = smallest_fitting_gpu(m, base.gpus_per_node)
             wt = 2.0 * m.p_total / GB
-            base_row = [name, m.p_total/1e9, m.p_active_layers/1e9, int(m.is_moe), round(wt)]
+            base_row = [name, m.p_total/1e9, m.p_active/1e9, int(m.is_moe), round(wt)]
             if gpu is None:
                 # 10 fields after base_row's 5, to match the 15-column header. Was 9: the
                 # bottleneck string landed in the train_frac column and every field after

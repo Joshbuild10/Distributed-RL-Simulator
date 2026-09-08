@@ -7,3 +7,4 @@ experiments/
 *.txt
 data/
 results/poster*
+*step_anatomy.py

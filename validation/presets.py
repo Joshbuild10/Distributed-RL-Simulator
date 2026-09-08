@@ -21,7 +21,7 @@ H800_NODE = dict(node_flops=8 * 989e12, node_hbm=8 * 80 * GB, node_bw=8 * 3.35 *
 # Architecture description: https://huggingface.co/Qwen/Qwen2.5-32B, https://huggingface.co/Qwen/Qwen2.5-32B/blob/main/config.json
 QWQ32B = ModelSpec(  # QwQ-32B == Qwen2.5-32B backbone
     name="QwQ-32B (dense)", is_moe=False,
-    p_total=32.5e9, p_active_layers=31.0e9,
+    p_total=32.5e9, p_active=31.0e9,
     d_model=5120, n_layers=64, n_q_heads=40, n_kv_heads=8, head_dim=128,
     vocab=152064, tied_embeddings=False)
 
@@ -29,7 +29,7 @@ QWQ32B = ModelSpec(  # QwQ-32B == Qwen2.5-32B backbone
 # Architecture description: https://arxiv.org/abs/2508.06471, https://huggingface.co/zai-org/GLM-4.5-Air/blob/main/config.json 
 GLM45_AIR = ModelSpec(  # INTELLECT-3 base: 106B total / 12B active
     name="GLM-4.5-Air (MoE 106B/12B)", is_moe=True,
-    p_total=106e9, p_active_layers=12e9,
+    p_total=106e9, p_active=12e9,
     d_model=4096, n_layers=46, n_q_heads=96, n_kv_heads=8, head_dim=128,
     vocab=151552, tied_embeddings=False)
 
@@ -37,7 +37,7 @@ GLM45_AIR = ModelSpec(  # INTELLECT-3 base: 106B total / 12B active
 # Architecture description: https://huggingface.co/Qwen/Qwen3-4B/blob/main/config.json
 QWEN3_4B = ModelSpec(
     name="Qwen3-4B-Instruct (dense)", is_moe=False,
-    p_total=4.0e9, p_active_layers=3.6e9,
+    p_total=4.0e9, p_active=3.6e9,
     d_model=2560, n_layers=36, n_q_heads=32, n_kv_heads=8, head_dim=128,
     vocab=151936, tied_embeddings=True)
 
@@ -208,19 +208,19 @@ def primerl_deepdive() -> Scenario:
 
 R1_QWEN_1_5B = ModelSpec(
     name="R1-Distill-Qwen-1.5B", is_moe=False,
-    p_total=1.78e9, p_active_layers=1.31e9,
+    p_total=1.78e9, p_active=1.31e9,
     d_model=1536, n_layers=28, n_q_heads=12, n_kv_heads=2, head_dim=128,
     vocab=151936, tied_embeddings=False)
 
 R1_QWEN_7B = ModelSpec(          # Qwen2.5-Math-7B backbone
     name="R1-Distill-Qwen-7B", is_moe=False,
-    p_total=7.61e9, p_active_layers=6.52e9,
+    p_total=7.61e9, p_active=6.52e9,
     d_model=3584, n_layers=28, n_q_heads=28, n_kv_heads=4, head_dim=128,
     vocab=152064, tied_embeddings=False)
 
 R1_QWEN_14B = ModelSpec(
     name="R1-Distill-Qwen-14B", is_moe=False,
-    p_total=14.77e9, p_active_layers=13.2e9,
+    p_total=14.77e9, p_active=13.2e9,
     d_model=5120, n_layers=48, n_q_heads=40, n_kv_heads=8, head_dim=128,
     vocab=152064, tied_embeddings=False)
 

@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any
 class ModelSpec:
     is_moe: bool            # Uses mixture of experts (MoE) architecture or not
     p_total: float          # Total model parameters
-    p_active_layers: float  # Active params in decoder layers only (for compute)
+    p_active: float  # Active params in decoder layers only (for compute)
     d_model: int            # Hidden dimension of the model
     n_layers: int           # Number of decoder layers in the transformer
     n_q_heads: int          # Number of heads for querying attention
@@ -46,7 +46,7 @@ class ModelSpec:
         causal coefficient 2 the ratio is T*attn_coef/P_active_layers  =>  T = frac*P/attn_coef.
         Note this is much SMALLER for MoE (small P_active) at the same N, H, L.
         """
-        return fraction * self.p_active_layers / self.attn_coef
+        return fraction * self.p_active / self.attn_coef
 
 
 @dataclass
@@ -133,6 +133,9 @@ class AlgoSpec:
     # loop structure
     opt_steps: int = 1                      # optimizer (minibatch) steps per rollout batch
     seqs_per_micro_per_gpu: float = 1.0     # gradient-accumulation micro-batch: this sets activation memory
+    act_site_parallel: bool = False         # True: activations sequence/tensor-parallel sharded across the site
+                                            #   (per-node micro-batch, independent of node size). False (default):
+                                            #   data-parallel, one micro-batch per GPU (validation-calibrated path).
     
     compression_ratio: float = 1.0      # Weight compression factor
     sync_interval: float = 1.0          # Off-policy staleness degree k. Affects how stages and the per-step broadcast time:

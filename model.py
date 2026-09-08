@@ -39,6 +39,8 @@ class TrainingMemory:
     grad_accum: float
     fits: bool
     headroom: float
+    persist_per_gpu: float      # sharded weights+grads+optimiser resident on ONE GPU
+    state_fits: bool            # persist_per_gpu <= per-GPU HBM (the solver-ENFORCED floor)
 
 
 @dataclass
@@ -135,7 +137,7 @@ def training_compute(s: Scenario) -> TrainingCompute:
     tok_batch = rl.size_batch * rl.context_len
 
     # FLOPs for a forward pass through the network, excluding self-attention
-    c_layers = 2.0 * m.p_active_layers * tok_batch
+    c_layers = 2.0 * m.p_active * tok_batch
 
     # Causal self-attention over the full context: 4 * B * T^2 * N * H * L
     if a.include_attention:
@@ -166,28 +168,45 @@ def training_memory(s: Scenario) -> TrainingMemory:
     m, a, hw = s.model, s.algo, s.train_hw
     params = m.p_total
 
-    # Calculates memory per node to stores the weights, gradients and optimiser states
-    weights = a.b_weights_train * params / hw.n_shard
-    grads = a.b_grads * params / hw.n_shard
-    opt_states = a.b_optimiser * params / hw.n_shard
+    # Per-node persistent state (weights + grads + optimiser). Sharded across the FSDP group
+    # (n_shard = GPUs per group): per-GPU = state/n_shard, per-node = that x gpus_per_node.
+    world_gpus = hw.n_nodes * hw.gpus_per_node
+    shard_gpus = hw.n_shard
+    if not (1 <= shard_gpus <= world_gpus) or world_gpus % shard_gpus:
+        raise ValueError(f"n_shard={shard_gpus} invalid for {world_gpus}-GPU world "
+                         f"(need 1 <= n_shard <= world and n_shard | world).")
+    node_state_scale = hw.gpus_per_node / shard_gpus
+
+    weights = a.b_weights_train * params * node_state_scale
+    grads = a.b_grads * params * node_state_scale
+    opt_states = a.b_optimiser * params * node_state_scale
 
     recomp_coef = 1 if a.recomp_act == 1 else 20
 
-    # Activation memory is set by the gradient-accumulation micro-batch resident on one
-    # GPU, not by the whole rollout batch.
+    # Activation of the grad-accumulation micro-batch. act_site_parallel: one micro-batch sharded
+    # across the site (per-node, independent of node size). Else data-parallel: one per GPU.
     toks_per_micro_per_gpu = a.seqs_per_micro_per_gpu * s.rl.context_len
     act_per_gpu = 2.0 * recomp_coef * toks_per_micro_per_gpu * m.d_model * m.n_layers
-    act = act_per_gpu * hw.gpus_per_node
+    if a.act_site_parallel:
+        act = act_per_gpu
+        resident_per_node = a.seqs_per_micro_per_gpu
+    else:
+        act = act_per_gpu * hw.gpus_per_node
+        resident_per_node = a.seqs_per_micro_per_gpu * hw.gpus_per_node
 
     mem_total = weights + grads + opt_states + act
 
-    n_gpus = hw.n_nodes * hw.gpus_per_node
+    grad_accum = s.rl.size_batch / max(hw.n_nodes * resident_per_node, 1) / max(a.opt_steps, 1)
 
-    grad_accum = s.rl.size_batch / max(n_gpus * a.seqs_per_micro_per_gpu, 1) / max(a.opt_steps, 1)
+    # Persistent state per GPU, and whether it fits per-GPU HBM (diagnostic; solver gates on mem.fits).
+    per_gpu_hbm = hw.node_hbm / hw.gpus_per_node
+    persist_per_gpu = (weights + grads + opt_states) / hw.gpus_per_node
+    state_fits = persist_per_gpu <= per_gpu_hbm
 
     return TrainingMemory(weights=weights, grads=grads, optimiser=opt_states, activations=act,
                            act_per_gpu=act_per_gpu, total=mem_total, grad_accum=grad_accum,
-                           fits=mem_total <= hw.node_hbm, headroom=hw.node_hbm - mem_total)
+                           fits=mem_total <= hw.node_hbm, headroom=hw.node_hbm - mem_total,
+                           persist_per_gpu=persist_per_gpu, state_fits=state_fits)
 
 
 def rollout_terms(s: Scenario) -> RolloutTerms:
@@ -206,7 +225,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     # The clamp is a no-op when p_active_layers correctly excludes embeddings/head; it only bites
     # if a ModelSpec sets p_active_layers == p_total (i.e. already includes them), which would
     # otherwise double-count the head and report >100% of resident weights.
-    mem_weights_decode = min(a.b_weights_inf * (m.p_active_layers + m.p_head),
+    mem_weights_decode = min(a.b_weights_inf * (m.p_active + m.p_head),
                              a.b_weights_inf * m.p_total)
     free_mem = hw.node_hbm - mem_weights_inf
     model_fits = free_mem > 0 # If model doesn't fit, some form of sharding needs to be employed during inference
@@ -231,7 +250,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     seq_par = math.floor(free_mem / kv_provision) if model_fits and kv_provision > 0 else 0
 
     # Compute for prefill per response (Divided by the group if it's prefix-cached)
-    c_pre_layers = 2.0 * m.p_active_layers * rl.prompt_len
+    c_pre_layers = 2.0 * m.p_active * rl.prompt_len
     # Optionally adds attention compute
     if a.include_attention:
         # Total compute used in self-attention on the given batch
@@ -245,7 +264,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
         c_prefill /= rl.responses_per_prompt
 
     # Compute for decode per response
-    c_dec_layers = 2.0 * m.p_active_layers * rl.response_len_mean
+    c_dec_layers = 2.0 * m.p_active * rl.response_len_mean
     # Sum the compute in the decode steps of attention over the growing context:
     #   4 * N*H*L * sum_t (P + t)  = 4*N*H*L*(P*E[R] + E[R^2]/2)
     if a.include_attention:

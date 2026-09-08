@@ -28,7 +28,7 @@ from feasibility_core import (FeasConfig, MODELS, POLICY_THRESHOLDS, GPUS, HIGH_
                               smallest_fitting_gpu, total_time, optimal_split, per_step_flop,
                               required_bcast_mbps, config_lines, node_gpus_tpp_cap,
                               tpp_per_chip, node_gpus_power_cap, effective_node_gpus,
-                              with_cfg as _with, split_for as _split,
+                              with_cfg as _with, split_for as _split, gpus_of,
                               fmt_time as _ft, fmt_num as _fn, fmt_ratio as _tr, fmt_rate)
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "results/dashboard.html"
@@ -199,7 +199,7 @@ frontier = grouped_bars([_tlab(n) for n in MT], [(f"{d}d", PAL[i]) for i, d in e
 
 MG = {n: smallest_fitting_gpu(m, GPN) for n, m in MODELS.items()}
 MSHORT = {"Llama3-8B": "L3-8B", "Llama3-70B": "L3-70B", "Llama3-405B": "L3-405B",
-          "Qwen3-30B-A3B": "Q3-30B/A3", "Qwen3-235B-A22B": "Q3-235B/A22", "Kimi-K3": "K3-2.4T"}
+          "Qwen3-30B-A3B": "Q3-30B/A3", "Qwen3-235B-A22B": "Q3-235B/A22", "Kimi-K3": "K3-2.4T", "Llama4-402B-A17B": "L4-402B/A17"}
 S2F = {v: k for k, v in MSHORT.items()}
 def _mcfg(cat):
     n = S2F[cat]; return _with(base, model=MODELS[n], gpu=MG[n], target_c_rl=GROK3_C_RL) if MG[n] else None
@@ -248,9 +248,7 @@ gpucap_hm = heatmap([_hmlab(n) for n in MT], list(_CAPCOL),
                     rowaxis="RL compute budget (FLOP)",
                     colaxis=f"GPU family, capped GPUs/node under the {H100_EQUIV}-H100 TPP+HBM cap")
 
-# --- 2f. REPLACES the old WAN x compression grid, which mostly restated A1's feasibility answer at
-# 16 (bandwidth, compression) pairs. This asks the question a monitor or an evader actually asks:
-# what LINK does the weight broadcast need so the network is never the bottleneck?
+# --- 2f. What LINK does the weight broadcast need so the network is never the bottleneck?
 # Reported as the ACTUAL wire rate, which scales as 1/compression -- so the compression factor is
 # named in the axis label, since the same run needs 50x less link at 50x compression.
 BW_MODELS = [n for n in MODELS if MG[n]]
@@ -305,30 +303,36 @@ batchcompare = grouped_bars([_tlab(n) for n in MT],
                             ylab="min GPUs to finish in window",
                             annotfn=lambda cat, s: (lambda d, cn: ffloor(_bccfg(cat, cn), int(d[:-1]) * 86400))(*s.split()))
 
-# evaluate(), not raw min_cluster(): always returns an operating point (min cluster if feasible,
-# else the full-stock floor) so this doesn't break if 2.5e25/180d becomes infeasible under whatever
-# FeasConfig defaults are currently live (WAN/batch/etc. get tuned directly in feasibility_core.py).
-cfgR = _with(base, target_c_rl=2.5e25); solR = evaluate(cfgR, 180 * 86400)
-N, base_t = solR["N"], solR["wall_s"]
+# Sensitivity runs at an EXPLICIT GPU budget (not a window's min-cluster), so the operating point is
+# unambiguous. optimal_split() picks the best trainer:inference allocation for that budget; we then
+# hold that ACTUAL cluster (its trainer + inference GPU COUNTS) FIXED and perturb each physics lever
+# -> wall-clock change at fixed hardware. The solver is GPU-based, so total_time() takes GPU COUNTS.
+SENS_GPUS = 100_000
+cfgR = _with(base, target_c_rl=2.5e25)
+_solR = optimal_split(cfgR, SENS_GPUS)                    # (tt, nt_nodes, ni_nodes, r, train_frac)
+_sR = _solR[3].scenario
+_ntg = _sR.train_hw.n_nodes * _sR.train_hw.gpus_per_node
+_nig = _sR.inf_hw.n_nodes * _sR.inf_hw.gpus_per_node
+base_t = _solR[0]
 LEV = {"WAN bandwidth": lambda c, k: _with(c, wan_mbps=c.wan_mbps * k),
        "compression": lambda c, k: _with(c, compression=c.compression * k),
        "HBM bandwidth": lambda c, k: _with(c, inf_bw_mult=c.inf_bw_mult * k),
        "HBM capacity": lambda c, k: _with(c, hbm_mult=c.hbm_mult * k),
        "inference FLOP": lambda c, k: _with(c, mfu_inf=c.mfu_inf * k),
        "training FLOP": lambda c, k: _with(c, mfu_train=c.mfu_train * k),
-       "E[R] length": lambda c, k: _with(c, er=c.er * k), "node count": None}
+       "E[R] length": lambda c, k: _with(c, er=c.er * k), "GPU budget": None}
 torn = []
 for name, fn in LEV.items():
-    if name == "node count":
-        lo = total_time(cfgR, max(1, int(solR["nt"] * .5)), max(1, int(solR["ni"] * .5)))[0]
-        hi = total_time(cfgR, solR["nt"] * 2, solR["ni"] * 2)[0]
+    if name == "GPU budget":
+        lo = total_time(cfgR, _ntg * .5, _nig * .5)[0]
+        hi = total_time(cfgR, _ntg * 2, _nig * 2)[0]
     else:
-        lo = total_time(fn(cfgR, .5), *_split(fn(cfgR, .5), N))[0]
-        hi = total_time(fn(cfgR, 2.), *_split(fn(cfgR, 2.), N))[0]
+        lo = total_time(fn(cfgR, .5), _ntg, _nig)[0]
+        hi = total_time(fn(cfgR, 2.), _ntg, _nig)[0]
     torn.append((name, lo / base_t, hi / base_t, max(lo, hi) / min(lo, hi)))
 torn.sort(key=lambda x: -x[3])
 tfig = tornado(torn, f"2c. Sensitivity tornado -- wall-clock x-swing per lever "
-                     f"({MODEL_NAME}, {GROK3_C_RL:.1e}, 180d op. point)")
+                     f"({MODEL_NAME}, {GROK3_C_RL:.1e}, {_ntg + _nig:,}-GPU budget, base {_ft(base_t)})")
 
 # --- 2i. HBM bandwidth on its own axis rather than only a x0.5/x2 tornado bar. It earns the
 # space twice over: it is the binding constraint in this rollout-bound regime (it beats every
@@ -355,7 +359,7 @@ pol_hm = heatmap([_hmlab(n) for n in MT], [f"{n}\n{v:.0e}" for n, v in bars],
 # --- 2b. inverse of 2a: given a FIXED GPU stock (swept, not the target), what's the MAXIMUM RL
 # compute achievable at the optimal split. Mirrors feasibility.py's max_compute_by_stock table
 # (same optimal_split/per_step_flop calls) so the CLI table and this chart always agree.
-STOCK_SWEEP = (32, 128, 1024, 10_000, 100_000, 1_000_000)
+STOCK_SWEEP = (64, 128, 1024, 10_000, 100_000, 1_000_000)
 STOCK_LABEL = {s: f"{_fn(s)} GPUs" for s in STOCK_SWEEP}
 LABEL_STOCK = {v: k for k, v in STOCK_LABEL.items()}
 
@@ -378,8 +382,7 @@ def max_op_at_stock(cfg, stock):
     # silently over-allocated whole configured-size nodes (stock=16 with a 720-node -> 1,440 GPUs).
     eff = effective_node_gpus(cfg.gpus_per_node, stock)
     c = _with(cfg, stock_gpus=stock, gpus_per_node=eff)
-    n_total = stock // eff
-    sol = optimal_split(c, n_total)
+    sol = optimal_split(c, stock)
     if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
         return None
     tt, nt, ni, r, frac = sol
@@ -392,7 +395,7 @@ def max_op_at_stock(cfg, stock):
     inf_peak = s.inf_hw.n_nodes * s.inf_hw.flops
     total_peak = train_peak + inf_peak
     model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
-    return dict(n_total=n_total, gpus=n_total * eff, nt=nt, ni=ni, frac=frac,
+    return dict(n_total=nt + ni, gpus=gpus_of(r), nt=nt, ni=ni, frac=frac,
                 t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
                 t_broadcast=r.t_bc, bottleneck=r.bottleneck,
                 mfu_model=model_flops_step / (r.t_step * total_peak),
@@ -442,6 +445,18 @@ CEN_INT4 = {**CEN, "compression": 4.0}                                 #   which
 DC_WIN_S = 180 * 86400
 DC_SERIES = [("decentralised", PAL[3]), ("centralised", PAL[2])]
 
+# 2o/2q's own stock sweep, DROPPING the 64-GPU point from the shared STOCK_SWEEP. At 64 GPUs
+# centralised's 72-GPU (NVL72) node can't even be FORMED once -- effective_node_gpus caps it to
+# min(72, 64//2)=32, so the only split is one 32-GPU trainer node + one 32-GPU inference node, and
+# 32 GPUs can't shard Llama-405B's 3.24TB persistent state under 80GB/GPU (needs >=41) -> no-fit.
+# That's a real result (a datacentre-node config is a bad fit for a tiny fleet), but it's a
+# degenerate corner for a chart whose whole point is comparing at REALISTIC stock sizes, not
+# whether NVL72 fits in a closet. 128 GPUs is the smallest point where centralised can form >=2
+# real nodes, so the pair starts there instead. Only used by 2o/2q; the general 2b chart (`base`,
+# 16 GPUs/node, no floor-adjacent corner) and the max-compute-by-stock appendix keep the full
+# STOCK_SWEEP starting at 64.
+DC_STOCK_SWEEP = tuple(s for s in STOCK_SWEEP if s >= 128)
+
 
 def _dccfg(scen, name, int4=False):
     """DEC/CEN config for target `name`. Applies the budget-scaled batch (BATCH_MODE) on top of
@@ -475,7 +490,7 @@ dc_frontier = grouped_bars([_tlab(n) for n in MT], DC_SERIES,
                            ylab="min GPUs to finish in 180d",
                            annotfn=lambda cat, s: ffloor(_dccfg(s, _LAB2NAME[cat]), DC_WIN_S))
 
-dc_stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES,
+dc_stockfig = grouped_bars([STOCK_LABEL[s] for s in DC_STOCK_SWEEP], DC_SERIES,
                            lambda cat, s: max_c_rl_at_stock(_with(base, **(CEN if s == "centralised" else DEC)),
                                                             LABEL_STOCK[cat], DC_WIN_S),
                            f"2o. Decentralised vs centralised -- max achievable RL compute vs GPU stock "
@@ -491,7 +506,7 @@ dc_frontier_int4 = grouped_bars([_tlab(n) for n in MT], DC_SERIES,
                                 ylab="min GPUs to finish in 180d",
                                 annotfn=lambda cat, s: ffloor(_dccfg(s, _LAB2NAME[cat], int4=True), DC_WIN_S))
 
-dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], DC_SERIES,
+dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in DC_STOCK_SWEEP], DC_SERIES,
                                 lambda cat, s: max_c_rl_at_stock(_with(base, **(CEN_INT4 if s == "centralised" else DEC_INT4)),
                                                                  LABEL_STOCK[cat], DC_WIN_S),
                                 f"2q. Same, max compute vs stock at 4x sync -- decentralised compute PLATEAUS as the "
