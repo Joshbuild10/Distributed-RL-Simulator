@@ -134,7 +134,7 @@ def report(r: SimResult) -> None:
     print(f"  throughput: trainer {r.tok_s_train:,.0f} tok/s (stage-local) | inference "
           f"{r.tok_s_inf:,.0f} tok/s stage-local, {r.tok_s_inf_achieved:,.0f} achieved over the step "
           f"| implied MFU {r.mfu_hw*100:.1f}%")
-    print(f"  T_STEP = {fmt(r.t_step,'s')}   staleness = {r.staleness} step(s)")
+    print(f"  T_STEP = {fmt(r.t_step,'s')}   policy age = {r.policy_age} step(s)")
     print(f"  N_STEPS = {r.n_steps}   ->   T_TOTAL = {fmt(r.t_total,'s')}")
     print(f"  ratio inference:training  --  true FLOPs {r.flop_ratio:.2f}x  |"
           f"  GPU-time {r.gputime_ratio:.2f}x")

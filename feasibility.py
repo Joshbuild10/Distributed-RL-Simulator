@@ -32,7 +32,7 @@ from feasibility_core import (
     all_targets, cell_text, config_lines, evaluate, fmt_num, fmt_ratio, fmt_time,
     min_wall_full_stock, model_targets, n_steps, optimal_split, per_step_flop, fmt_rate,
     required_bcast_mbps, sites_power, smallest_fitting_gpu, split_for, total_time, with_cfg, GB,
-    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus, gpus_of,
+    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus, gpus_of, FACILITY_PUE,
 )
 
 
@@ -246,7 +246,8 @@ def max_compute_table(base, windows_d=(30, 90, 180, 720)):
         gpus = (base.stock_gpus // base.gpus_per_node) * base.gpus_per_node
         print(f"  no-fit: weights exceed a single node's HBM at {gpus:,} GPUs -- needs inference TP")
         return
-    print(f"  stock: {op['gpus']:,} GPUs ({op['n_total']:,} nodes) | optimal split tr:inf "
+    print(f"  stock: {base.stock_gpus:,} available -> {op['gpus']:,} GPUs used "
+          f"({op['n_total']:,} nodes) | optimal split tr:inf "
           f"{fmt_ratio(op['frac'])} ({op['nt']:,} train / {op['ni']:,} inf nodes)")
     print(f"  per-step FLOP {op['per_step_flop']:.3e} | T_step {fmt_time(op['t_step'])} | "
           f"bottleneck {op['bottleneck']}")
@@ -359,29 +360,30 @@ def export_cap_table(base, target_c_rl, target_name="target", gpus_l=HIGH_END_GP
 
 def power_node_table(gpus_l=HIGH_END_GPUS, caps_kw=(10, 40, 132)):
     """Max chips per node under a per-node POWER budget, from board TDP -- a second physical node
-    cap (a rack PDU / cooling limit) independent of the TPP/HBM export cap. Standalone reference
+    cap (a rack PDU / cooling limit) independent of the TPP/HBM export cap. Caps are FACILITY draw
+    (board TDP x FACILITY_PUE). Standalone reference
     table: caps_kw defaults span a single high-density server (~10kW), a small rack (~40kW), and a
     full GB200 NVL72-class rack (~132kW)."""
-    print(f"\n{_rule()}\n  MAX NODE SIZE UNDER PER-NODE POWER CAP (GPUs/node = floor(cap / board W))"
+    print(f"\n{_rule()}\n  MAX NODE SIZE UNDER PER-NODE FACILITY POWER CAP (GPUs/node = floor(cap / (board W x PUE)))"
           f"\n{_rule()}")
     print(f"  {'GPU':<9}{'board W':>9}" + "".join(f"{f'{c} kW':>9}" for c in caps_kw))
     for g in gpus_l:
         cells = "".join(f"{node_gpus_power_cap(g, c):>9}" for c in caps_kw)
         print(f"  {g:<9}{GPUS[g]['watts']:>9}" + cells)
-    print("  (board W = per-GPU TDP; excludes host/NIC/cooling overhead, so real nodes fit fewer.)")
+    print(f"  (board W = per-GPU TDP; caps are FACILITY draw, board W x {FACILITY_PUE:g} for host/NIC/conversion/cooling.)")
 
 
 def power_envelope_table(gpus_l=HIGH_END_GPUS, caps_mw=(1, 5)):
     """Max TOTAL GPUs a SITE can run under a power envelope (1 MW / 5 MW), from board TDP. A
     site/detectability cap on GPU COUNT -- distinct from the per-node power table (rack limit) and
-    from the TPP/HBM export cap (which caps NODE size). floor(MW x 1e6 / board_W)."""
-    print(f"\n{_rule()}\n  MAX GPUs UNDER SITE POWER ENVELOPE (total GPUs = floor(MW / board W))"
+    from the TPP/HBM export cap (which caps NODE size). floor(MW x 1e6 / (board_W x FACILITY_PUE))."""
+    print(f"\n{_rule()}\n  MAX GPUs UNDER SITE FACILITY POWER ENVELOPE (total GPUs = floor(MW / (board W x PUE)))"
           f"\n{_rule()}")
     print(f"  {'GPU':<9}{'board W':>9}" + "".join(f"{f'{c} MW':>12}" for c in caps_mw))
     for g in gpus_l:
         cells = "".join(f"{node_gpus_power_cap(g, c * 1000):>12,}" for c in caps_mw)
         print(f"  {g:<9}{GPUS[g]['watts']:>9}" + cells)
-    print("  (board W = per-GPU TDP; real sites also draw host/NIC/network/cooling, so fewer fit.)")
+    print(f"  (facility draw = board W x {FACILITY_PUE:g}; covers host/NIC/network/power conversion/cooling.)")
 
 
 def bandwidth_requirement_table(base, targets=None, window_d=180):
@@ -636,7 +638,7 @@ def max_compute_by_stock(base, stocks=STOCK_SWEEP, windows_d=(30, 90, 180, 720))
     the per-row operating-point columns don't fit a pure rows x cols cell shape."""
     print(f"\n{_rule(160)}\n  MAX ACHIEVABLE RL COMPUTE x GPU STOCK: {base.model.name}, optimal "
           f"split per stock size ({_cfg_hdr(base)})\n{_rule(160)}")
-    print(f"  {'stock':<12}{'tr:inf':>8}{'T_step':>9}{'T_update':>10}{'T_rollout':>11}"
+    print(f"  {'stock':<12}{'used':>13}{'tr:inf':>8}{'T_step':>9}{'T_update':>10}{'T_rollout':>11}"
           f"{'T_bcast':>9}{'MFU':>6}{'bottleneck':>16}  " + "".join(f"{f'{d}d steps/max C_RL':>26}" for d in windows_d))
     for stock in stocks:
         op = max_compute_operating_point(base, stock)
@@ -647,7 +649,8 @@ def max_compute_by_stock(base, stocks=STOCK_SWEEP, windows_d=(30, 90, 180, 720))
         for d in windows_d:
             steps, c_rl = steps_and_c_rl(op, d * 86400)
             cells.append(f"{fmt_num(steps) + '/' + f'{c_rl:.2e}':>26}")
-        print(f"  {fmt_num(stock)+' GPUs':<12}{fmt_ratio(op['frac']):>8}{fmt_time(op['t_step']):>9}"
+        used = f"{fmt_num(op['gpus'])} ({100*op['gpus']/stock:.1f}%)"
+        print(f"  {fmt_num(stock)+' GPUs':<12}{used:>13}{fmt_ratio(op['frac']):>8}{fmt_time(op['t_step']):>9}"
               f"{fmt_time(op['t_update']):>10}{fmt_time(op['t_rollout']):>11}"
               f"{fmt_time(op['t_broadcast']):>9}{op['mfu_hw']*100:>5.0f}%"
               f"{op['bottleneck']:>16}  " + "".join(cells))
@@ -657,7 +660,9 @@ def max_compute_by_stock(base, stocks=STOCK_SWEEP, windows_d=(30, 90, 180, 720))
     print("   hw-FLOPs/8N convention shown (matches published RL-training MFU figures, e.g. prime-")
     print("   rl's 38%; the model-FLOPs/6N figure is also computed -- see mfu_model in the CSV).")
     print("   Cell = training steps / max achievable C_RL (FLOP) at that stock+window, at the")
-    print("   full-stock-for-that-row optimal split.)")
+    print("   full-stock-for-that-row optimal split.")
+    print("   'used' = GPUs the split actually allocates out of the stock available: whole nodes")
+    print("   only, so a remainder the node size cannot fill stays idle.)")
 
 
 def write_max_compute_by_stock_csv(base, path="experiments/max_compute_by_stock.csv",
@@ -668,19 +673,19 @@ def write_max_compute_by_stock_csv(base, path="experiments/max_compute_by_stock.
     with open(path, "w", newline="") as fh:
         write_config_comment(fh, base)
         w = csv.writer(fh)
-        w.writerow(["model", "stock_gpus", "nodes", "runnable", "train_frac", "t_step_s",
+        w.writerow(["model", "stock_gpus", "gpus_used", "nodes", "runnable", "train_frac", "t_step_s",
                     "t_update_s", "t_rollout_s", "t_broadcast_s", "mfu_model_achieved",
                     "mfu_hw_achieved", "bottleneck", "window_days", "steps", "max_c_rl"])
         for stock in stocks:
             op = max_compute_operating_point(base, stock)
             if op is None:
                 for d in windows_d:
-                    w.writerow([base.model.name, stock, "", 0, "", "", "", "", "", "", "",
+                    w.writerow([base.model.name, stock, "", "", 0, "", "", "", "", "", "", "",
                                 "no-fit", d, "", ""])
                 continue
             for d in windows_d:
                 steps, c_rl = steps_and_c_rl(op, d * 86400)
-                w.writerow([base.model.name, stock, op["n_total"], 1, round(op["frac"], 3),
+                w.writerow([base.model.name, stock, op["gpus"], op["n_total"], 1, round(op["frac"], 3),
                             round(op["t_step"], 2), round(op["t_update"], 2), round(op["t_rollout"], 2),
                             round(op["t_broadcast"], 2), round(op["mfu_model"], 4), round(op["mfu_hw"], 4),
                             op["bottleneck"], d, round(steps), f"{c_rl:.3e}"])

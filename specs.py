@@ -167,6 +167,7 @@ class HWSpec:
     mfu: float = 0.40                   # Baseline compute-bound utilisation
     bw_eff: float = 0.85                # Achievable fraction of peak reported bandwidth
     penalty_para: float = 1.0           # Throughput penalty under model sharding (<=1)
+    inf_tp: int = 1                     # Inference nodes per tensor-parallel serving group (1 = none)
     n_shard: int = 1                    # ZeRO-3 sharding degree (for trainer nodes)
     capacity_mult: float = 1.0          # Scales down node FLOPs AND bandwidth to represent heterogeneous / weaker hardware
 

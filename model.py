@@ -92,7 +92,7 @@ class SimResult:
     bottleneck: str
     n_steps: int
     t_total: float
-    staleness: int
+    policy_age: int          # steps of policy staleness = sync_interval (k)
     flop_ratio: float
     gputime_ratio: float
     efficiency: Dict[str, float]
@@ -211,28 +211,28 @@ def training_memory(s: Scenario) -> TrainingMemory:
 
 def rollout_terms(s: Scenario) -> RolloutTerms:
     m, rl, a, hw, v = s.model, s.rl, s.algo, s.inf_hw, s.verify
+
     # Calculate memory requirements for model.
-    # CAPACITY: all params must be resident in HBM (every expert), so free-memory /
-    # concurrency / fit are sized on p_total.
+
+    # All params need to fit in HBM so memory is based on p_total.
     mem_weights_inf = a.b_weights_inf * m.p_total
-    # DECODE BANDWIDTH: each decode token reads only the ACTIVE path from HBM --
-    # attention + shared + the routed top-k experts (captured by p_active_layers) --
-    # plus the LM head (read every step to produce logits). For a dense model
-    # p_active_layers + p_head ~= p_total, so this is a ~no-op; for MoE it is smaller by
-    # ~p_total/p_active, which is the dominant correction to decode time (the full-weights
-    # read was the known MoE over-estimate).
-    # Clamped at the resident total: you cannot stream more bytes per token than are in HBM.
-    # The clamp is a no-op when p_active_layers correctly excludes embeddings/head; it only bites
-    # if a ModelSpec sets p_active_layers == p_total (i.e. already includes them), which would
-    # otherwise double-count the head and report >100% of resident weights.
+
+    # Each decode token reads only the active weights.
+    # Note that multiple experts can be activated over generation and may increase memory requirements
+    # Clamped at total params to avoid double counting the head whenp_active_layers == p_total
     mem_weights_decode = min(a.b_weights_inf * (m.p_active + m.p_head),
                              a.b_weights_inf * m.p_total)
-    free_mem = hw.node_hbm - mem_weights_inf
+
+    # A group is inf_tp nodes holding one shared copy of the weights/KV cache. Only viable with fast interconnect between nodes.
+    # NOTE: To add tensor parallel degree automatically inferred
+    tp = max(1, hw.inf_tp)
+    free_mem = tp * hw.node_hbm - mem_weights_inf
     model_fits = free_mem > 0 # If model doesn't fit, some form of sharding needs to be employed during inference
 
     # Effective FLOPs and bandwidth once hardware utilisation is taken into account
     bw_eff = hw.bw * hw.bw_eff
     flops_eff = hw.flops * a.tput_mult_inf * hw.mfu
+    grp_bw, grp_flops = tp * bw_eff, tp * flops_eff   # pooled across the group
 
     # KV cache memory per token, and read/write volume over a sequence
     kv_per_tok = a.b_kv * 2.0 * m.n_layers * m.n_kv_heads * m.head_dim
@@ -276,21 +276,23 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
 
     # A "wave" is a continuously-batched set of sequences with rollouts generation.
     # To distribute the workload evenly across waves, we calculate the average sequences per wave
-    # If the parallel processing capacity of allocated nodes exceeds the number of sequences to be generated,
-    # the number of nodes utilised is capped. Assumes up to 4-way inference-time model parallelism across nodes.
-    # TODO: Have parallelism degree depend on bandwidth between nodes
-    active_nodes = min(hw.n_nodes, max(1, 8 * math.ceil(rl.size_batch / seq_par))) if seq_par else 0
+    # We allocate at least one sequence per group of connected nodes. With extras left idling.
+    n_groups = max(1, hw.n_nodes // tp)
+    active_groups = min(n_groups, max(1, rl.size_batch)) if seq_par else 0
 
-    n_waves = math.ceil(rl.size_batch / max(seq_par * active_nodes, 1)) if seq_par else float("inf")
-    seqs_per_wave = rl.size_batch / (active_nodes * n_waves) if seq_par else float("inf")
+    n_waves = math.ceil(rl.size_batch / max(seq_par * active_groups, 1)) if seq_par else float("inf")
+    seqs_per_wave = rl.size_batch / (active_groups * n_waves) if seq_par else float("inf")
 
     # Time calculations (per wave)
-    t_dec_comp = (c_decode * seqs_per_wave) / flops_eff if seq_par else float("inf")
-    t_dec_mem = (mem_weights_decode * rl.response_len_mean) / bw_eff if bw_eff else float("inf")
+    t_dec_comp = (c_decode * seqs_per_wave) / grp_flops if seq_par else float("inf")
+    t_dec_mem = (mem_weights_decode * rl.response_len_mean) / grp_bw if bw_eff else float("inf")
     t_decode = max(t_dec_comp, t_dec_mem) # Overall decode step time
 
-    t_inf_attn = (vol_kv * seqs_per_wave) / bw_eff if bw_eff else float("inf")
-    t_prefill = (c_prefill * seqs_per_wave) / flops_eff if seq_par else float("inf")
+    # KV shards over heads first (<= n_kv_heads) then over the batch, so tp keeps helping past the head
+    # count at the cost of per-layer AllToAlls (not modelled). Batch shards cap at sequences in flight.
+    kv_shard = min(tp, m.n_kv_heads * max(1.0, seqs_per_wave))
+    t_inf_attn = (vol_kv * seqs_per_wave) / (bw_eff * kv_shard) if bw_eff else float("inf")
+    t_prefill = (c_prefill * seqs_per_wave) / grp_flops if seq_par else float("inf")
     t_env = v.t_env_per_rollout
 
     oversample_ratio = rl.oversample_ratio()
@@ -298,11 +300,10 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     # Overall step time
     t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves * oversample_ratio
 
-    # Total rollout FLOPs executed (to calculate compute-ratios)
-    if rl.prefix_caching:
-        c_rollout_total = (c_decode * rl.size_batch + c_prefill * rl.size_batch) * oversample_ratio
-    else:
-        c_rollout_total = (c_prefill * rl.responses_per_prompt + c_decode) * rl.size_batch * oversample_ratio
+    # Total rollout FLOPs executed (to calculate compute-ratios). c_prefill is already per-response --
+    # divided by the group above when prefix-cached -- so each response counts its prefill once either
+    # way, and the total is invariant to how a fixed batch is grouped into prompts x responses.
+    c_rollout_total = (c_prefill + c_decode) * rl.size_batch * oversample_ratio
 
     return RolloutTerms(
         kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, mem_weights_decode=mem_weights_decode,
@@ -381,12 +382,8 @@ def simulate(s: Scenario) -> SimResult:
     bottleneck = max(stages, key=stages.get)
     steps = n_steps(s)
     
-    # Calculates staleness. Guard on finiteness, not just t_step > 0: when the inference model
-    # doesn't fit a node (model_fits=False), rollout_terms returns t_rollout=inf, which makes
-    # gen_stage and hence t_step infinite too (it's one of the maxed/summed stages) -- so the
-    # ratio becomes inf/inf = NaN, and math.ceil(NaN) raises. An infinite step has no meaningful
-    # staleness; report 0 rather than crash.
-    staleness = math.ceil((t_bc + gen_stage) / t_step) if t_step > 0 and math.isfinite(t_step) else 0
+    # Policy age in steps
+    policy_age = int(max(0.0, s.algo.sync_interval))
 
     # Compute ratios: true FLOPs vs GPU-time
     flop_ratio = ro.c_rollout_total / tc.c_update
@@ -421,7 +418,7 @@ def simulate(s: Scenario) -> SimResult:
         scenario=s, tc=tc, mem=mem, ro=ro, t_update=t_update, t_verify=t_verify,
         vol_bc=vol_bc, t_bc=t_bc, stages=stages, t_step=t_step, mode=mode,
         bottleneck=bottleneck, n_steps=steps, t_total=steps * t_step,
-        staleness=staleness, flop_ratio=flop_ratio,
+        policy_age=policy_age, flop_ratio=flop_ratio,
         gputime_ratio=gputime_ratio,
         efficiency={k: v / t_step for k, v in stages.items()},
         tok_s_inf_achieved=tok_s_inf_achieved,

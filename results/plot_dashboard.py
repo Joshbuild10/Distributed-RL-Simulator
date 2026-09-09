@@ -27,7 +27,7 @@ from feasibility_core import (FeasConfig, MODELS, POLICY_THRESHOLDS, GPUS, HIGH_
                               batch_split, target_batch, target_batch_iso, all_targets, model_targets, evaluate,
                               smallest_fitting_gpu, total_time, optimal_split, per_step_flop,
                               required_bcast_mbps, config_lines, node_gpus_tpp_cap,
-                              tpp_per_chip, node_gpus_power_cap, effective_node_gpus,
+                              tpp_per_chip, node_gpus_power_cap, effective_node_gpus, FACILITY_PUE,
                               with_cfg as _with, split_for as _split, gpus_of,
                               fmt_time as _ft, fmt_num as _fn, fmt_ratio as _tr, fmt_rate)
 
@@ -438,8 +438,13 @@ stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], [(f"{d}d", PAL[i]
 # broadcast is small enough that the WAN is inert and the penalty is purely inference-wave/node-
 # size; drop to 4x and the 1 Gbps decentralised link becomes the binding constraint).
 DC_COMP = 16.0                                                        # primary weight-sync compression (4-bit int4 x 4x sparsify/DiLoCo)
-DEC = dict(gpus_per_node=16, wan_mbps=1_000, compression=DC_COMP)      # small islands, 1 Gbps internet
-CEN = dict(gpus_per_node=72, wan_mbps=1_000_000, compression=DC_COMP)  # NVL72 domain, 1 Tbps intra-DC fabric
+CEN_TP = 4                                                             # max NVL72 racks tensor-parallel per group;
+                                                                       #   8 = Llama-405B's n_kv_heads, where clean KV
+                                                                       #   head-sharding stops (JAX scaling book)
+DEC = dict(gpus_per_node=16, wan_mbps=1_000, compression=DC_COMP,
+           inf_tp_max=1)                                                   # small islands, 1 Gbps internet, no cross-node TP
+CEN = dict(gpus_per_node=72, wan_mbps=1_000_000, compression=DC_COMP,
+           inf_tp_max=CEN_TP)                                              # NVL72 domain, 1 Tbps intra-DC fabric
 DEC_INT4 = {**DEC, "compression": 4.0}                                 # companion pair: lighter 4x weight sync,
 CEN_INT4 = {**CEN, "compression": 4.0}                                 #   which lets the WAN/broadcast wall show
 DC_WIN_S = 180 * 86400
@@ -520,40 +525,60 @@ dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in DC_STOCK_SWEEP], DC_SER
 # datacentre NVL72 rack (72) and beyond. WAN/compression held at the centralised fabric so the
 # broadcast never binds and this isolates the inference-wave/HBM effect of node size. 2r: the max
 # compute a full stock can burn in 180d (rises ~linearly -- a bigger NVLink domain pools bandwidth,
-# lowering the sequential-decode rollout floor). 2s: min GPUs for a Grok-3-scale run (the U-shape --
-# 16-GPU islands are rollout-bound and cost ~2x; >=32 is update-bound and flat, creeping up past ~72
-# as node granularity coarsens).
+# lowering the sequential-decode rollout floor). 2s: min GPUs to finish, node size x the whole
+# compute-budget ladder, so the node-size effect is visible at every scale rather than at one target.
 INF_NODE_SWEEP = (16, 32, 64, 72, 128)
 INF_NODE_LABEL = {n: (f"{n}\n(NVL72)" if n == 72 else str(n)) for n in INF_NODE_SWEEP}
-_LBL2NODE = {v: k for k, v in INF_NODE_LABEL.items()}
+INF_NODE_SLAB = {n: f"{n}/node" + (" (NVL72)" if n == 72 else "") for n in INF_NODE_SWEEP}  # 2s series (legend)
+_LBL2NODE = {**{v: k for k, v in INF_NODE_LABEL.items()}, **{v: k for k, v in INF_NODE_SLAB.items()}}
 DC_NODE_FIX = dict(wan_mbps=CEN["wan_mbps"], compression=CEN["compression"])   # centralised fabric; isolate node size
-_GROK3_BOV = _batch_ov("Grok-3-Reasoning")                                     # hold Grok-3's batch across the sweep
 # Stock for the 2r node-size sweep. Under model.py's <=4-way sequence sharding, decode stays memory-
 # bound (weight streaming, t_dec_mem ~ 1/gpus_per_node) rather than over-packing into compute, so max
 # compute rises MONOTONICALLY with node size (bigger NVLink domain -> faster per-node weight streaming).
 # At this 100k stock the largest nodes (>=64) PLATEAU -- the 4x sharding wants more inference nodes than
 # 100k affords; the full 1.5M stock lets them keep climbing (raise this to see that).
-NODE_SWEEP_STOCK = 100_000
+NODE_SWEEP_STOCK = 1_500_000
 
 dc_node_maxc = grouped_bars([INF_NODE_LABEL[n] for n in INF_NODE_SWEEP], [("180d", PAL[2])],
                             lambda cat, s: max_c_rl_at_stock(_with(base, gpus_per_node=_LBL2NODE[cat], **DC_NODE_FIX),
                                                              NODE_SWEEP_STOCK, DC_WIN_S),
                             f"2r. Max achievable RL compute vs inference node size ({_fn(NODE_SWEEP_STOCK)}-GPU stock, "
                             f"180d, 1Tbps, {DC_COMP:g}x). Bigger NVLink domain -> faster weight streaming -> more compute "
-                            f"(monotonic under 4-way seq sharding); top nodes plateau (stock-limited at 100k)",
+                            f"(monotonic under 4-way seq sharding)",
                             ylab="max achievable RL compute (FLOP)",
                             annotfn=lambda cat, s: "no-fit", labelfn=fmt_sci,
                             hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
 
-dc_node_gpus = grouped_bars([INF_NODE_LABEL[n] for n in INF_NODE_SWEEP], [("180d", PAL[3])],
-                            lambda cat, s: fbar(_with(base, target_c_rl=GROK3_C_RL, gpus_per_node=_LBL2NODE[cat],
-                                                      **DC_NODE_FIX, **_GROK3_BOV), DC_WIN_S),
-                            f"2s. Min GPUs to finish a Grok-3-scale run ({GROK3_C_RL:.1e}, 180d) vs inference node size. "
-                            f"16-GPU islands are rollout-bound (~2x); >=32 update-bound",
+_node_ev_memo = {}
+
+
+def _node_ev(cat, slab):
+    """2s cell: one evaluate() per (compute budget, node size), memoised -- grouped_bars asks the
+    value/hollow/annotation callbacks separately and again on the drawing pass, and the infeasible
+    cells run a full-stock optimal_split far too slow to repeat four times."""
+    if (cat, slab) not in _node_ev_memo:
+        name = _LAB2NAME[cat]
+        _node_ev_memo[cat, slab] = evaluate(
+            _with(base, target_c_rl=MT[name], gpus_per_node=_LBL2NODE[slab],
+                  **DC_NODE_FIX, **_batch_ov(name)), DC_WIN_S)
+    return _node_ev_memo[cat, slab]
+
+
+# Missing the window is drawn HOLLOW, not as a value-less box: evaluate() already carries the full-
+# stock floor -- the fastest achievable wall-clock and the GPUs that reach it -- so the bar sits at
+# that GPU count with the wall-clock in the box. Both are the answer to "and if not in 180d, then
+# what?", which the full-height box discarded. Log axis: those floors run to ~1M GPUs against
+# feasible bars of ~64, which a linear axis flattens to slivers.
+dc_node_gpus = grouped_bars([_tlab(n) for n in MT],
+                            [(INF_NODE_SLAB[n], PAL[i]) for i, n in enumerate(INF_NODE_SWEEP)],
+                            lambda cat, s: _node_ev(cat, s)["gpus"] if _node_ev(cat, s)["runnable"] else None,
+                            "2s. Min GPUs to finish in 180d vs inference node size (GPUs per NVLink domain), "
+                            "per RL compute budget. Hollow = misses 180d, drawn at the GPUs reaching the "
+                            "fastest achievable wall-clock (in box)",
                             ylab="min GPUs to finish in 180d",
-                            scale="linear",
-                            annotfn=lambda cat, s: ffloor(_with(base, target_c_rl=GROK3_C_RL, gpus_per_node=_LBL2NODE[cat],
-                                                               **DC_NODE_FIX, **_GROK3_BOV), DC_WIN_S))
+                            hollowfn=lambda cat, s: (None if _node_ev(cat, s)["feasible"]
+                                                     else _ft(_node_ev(cat, s)["wall_s"]) + "!"),
+                            annotfn=lambda cat, s: "no-fit")
 
 # --- 2k: effect of mean response length E[R] on feasibility, grouped by RL compute budget (not
 # swept at one fixed target) -- mirrors feasibility.py's er_table(). Standardised on 180d (matching
@@ -591,7 +616,7 @@ quant_fig = small_multiples([_q4pair(n) for n in MT],
                             series=(("BF16 inference", PAL[3]), ("4-bit inference", PAL[2])))
 
 # Power-envelope cap (appendix table, built in the BODY below): a per-SITE power budget of 1 MW /
-# 5 MW bounds the TOTAL GPUs at a site to floor(MW / board_W). Distinct from the CCC node cap (2f)
+# 5 MW bounds the TOTAL GPUs at a site to floor(MW / (board_W x FACILITY_PUE)). Distinct from the CCC node cap (2f)
 # -- that caps the NODE by TPP/HBM; this caps the SITE by power, i.e. how many GPUs you can run
 # under a detectability tier. per_pow[gpu] = (board_W, gpus@1MW, gpus@5MW).
 POWER_CAPS_MW = (1, 5)
@@ -627,6 +652,23 @@ sizefig = grouped_bars([lab for _, lab in QW], [("math", PAL[0]), ("code", PAL[2
                        "3b. Size scaling -- Qwen3 family E[R] (math/code). *32B ~40% censored = lower bound",
                        ylab="mean response length E[R] (tokens)")
 
+
+# Right-censoring provenance for every probe file behind 3a/3b. A capped-sample mean is a LOWER
+# BOUND on the uncapped mean, so the censored share has to travel with the number rather than sit
+# in one hand-written chart title -- CENSOR_WARN marks where the mean stops being usable as-is.
+CENSOR_WARN = 0.10
+len_trows = []
+for _mdl, _lab in [(m, l) for m, l in DMODELS] + [(m, l) for m, l in QW]:
+    for _dom in DOM:
+        _p = f"{LEN}/{_mdl}_{_dom}_lengths.json"
+        _frac, _cap, _ = lengths_io.meta(_p)
+        _mean = lengths_io.mean_length(_p)
+        if _mean is None:
+            continue
+        _flag = ("<b>lower bound</b>" if _frac >= CENSOR_WARN else "usable")
+        len_trows.append(
+            f"<tr><td>{_lab}</td><td>{_dom}</td><td>{_mean:,.0f}</td>"
+            f"<td>{_frac:.0%}</td><td>{(f'{_cap:,}' if _cap else '&mdash;')}</td><td>{_flag}</td></tr>")
 
 AG = {n: lengths_io.agentic_means(f"{LEN}/agentic_{n}.json")
       for n in ("tau2", "swesmith", "nebius", "ccbench")}
@@ -713,12 +755,14 @@ for s in STOCK_SWEEP:
     op = max_op_at_stock(base, s)
     if op is None:
         stock_trows.append(f"<tr><td>{STOCK_LABEL[s]}</td>"
-                           f"<td colspan='10' class='inf'>no-fit: weights exceed a single node</td></tr>")
+                           f"<td colspan='11' class='inf'>no-fit: weights exceed a single node</td></tr>")
         continue
     for d in WIN:
         steps = d * 86400 / op["t_step"]
         c_rl = op["per_step_flop"] * steps
-        stock_trows.append(f"<tr><td>{STOCK_LABEL[s]}</td><td>{d}d</td><td>{_tr(op['frac'])}</td>"
+        stock_trows.append(f"<tr><td>{STOCK_LABEL[s]}</td>"
+                           f"<td>{_fn(op['gpus'])} ({100*op['gpus']/s:.1f}%)</td>"
+                           f"<td>{d}d</td><td>{_tr(op['frac'])}</td>"
                            f"<td>{_ft(op['t_step'])}</td><td>{_ft(op['t_update'])}</td>"
                            f"<td>{_ft(op['t_rollout'])}</td><td>{_ft(op['t_broadcast'])}</td>"
                            f"<td>{op['mfu_hw']*100:.0f}%</td><td>{op['bottleneck']}</td>"
@@ -752,12 +796,17 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 <h3>2.1 &middot; Decentralised vs centralised datacentre &mdash; the serial-latency penalty (Llama-405B, 180d)</h3>
 <p class="sub">The downside of distributed RL is serial step latency: (i) broadcasting fresh weights trainer&rarr;inference over the WAN, and (ii) the number of inference "waves", set by how much aggregate HBM (concurrency + weight-load bandwidth) a node pools. A centralised datacentre relaxes both &mdash; a large NVLink domain fuses GPUs into one fat node ({CEN['gpus_per_node']}/node here, the GB200 NVL72 rack) and an intra-DC fabric gives ~terabit trainer&rarr;inference links ({int(CEN['wan_mbps']/1000):,} Gbps) &mdash; vs small {DEC['gpus_per_node']}-GPU islands on {int(DEC['wan_mbps']):,} Mbps internet. Everything else is held at <code>base</code>, so the gap between paired bars is the decentralisation penalty. <b>Best centralised node size:</b> {_cen_note}. <b>Primary pair (2n, 2o) at {DC_COMP:g}&times; sync:</b> the broadcast is small enough that the WAN is inert, so the penalty is purely the inference-wave/node-size effect &mdash; ~2&times; the GPUs at frontier scale (though at small budgets decentralised is actually <i>cheaper</i>: centralised's 2&times;NVL72 floor is 144 GPUs). <b>Companion pair (2p, 2q) at lighter 4&times; sync:</b> the broadcast term grows 4&times; and the 1&nbsp;Gbps decentralised link becomes binding &mdash; decentralised flips from wave- to broadcast-bound (2p) and its achievable compute <i>plateaus</i> as the broadcast wall caps it, while centralised (terabit) keeps scaling (2q).</p>
 {panel(dc_frontier)}{panel(dc_stockfig)}{panel(dc_frontier_int4)}{panel(dc_stockfig_int4)}
-<p class="sub"><b>Inference node size sweep (2r, 2s).</b> The decentralised&rarr;centralised axis made explicit: GPUs per connected NVLink domain from 16 (small donated islands) through 72 (a GB200 NVL72 rack) to 128, WAN/compression held at the centralised fabric so this isolates the node-size effect. 2r &mdash; a bigger domain pools HBM bandwidth, lowers the sequential-decode rollout floor, and raises the compute a full stock can burn ~linearly. 2s &mdash; for a fixed Grok-3-scale run the cost is U-shaped: 16-GPU islands are rollout-bound (~2&times; the GPUs), &ge;32 flips to update-bound and flattens, creeping back up past ~72 as coarse node granularity wastes GPUs.</p>
+<p class="sub"><b>Inference node size sweep (2r, 2s).</b> The decentralised&rarr;centralised axis made explicit: GPUs per connected NVLink domain from 16 (small donated islands) through 72 (a GB200 NVL72 rack) to 128, WAN/compression held at the centralised fabric so this isolates the node-size effect. 2r &mdash; a bigger domain pools HBM bandwidth, lowers the sequential-decode rollout floor, and raises the compute a full stock can burn ~linearly. 2s &mdash; the same node-size axis crossed with the compute-budget ladder: the node size barely matters below ~1e24 (a handful of GPUs either way) and dominates at frontier scale, where 16-GPU islands cost ~2.4&times; the GPUs of a &ge;32 node and Grok-4 stops being reachable in 180d at all. A <b>hollow</b> bar is exactly that case &mdash; it is drawn at the GPU count that reaches the <i>fastest achievable</i> wall-clock (the full-stock floor), with that wall-clock in the box, so a missed window still reports what the run would cost and how long it would take.</p>
 {panel(dc_node_maxc)}{panel(dc_node_gpus)}
 
 <h2>3 &middot; Response-length campaign (measured E[R])</h2>
 <p class="sub">Feeds the runtime model's per-(model,task) E[R]. Agentic effective-context is the multi-turn regime the single-turn model doesn't yet represent.</p>
 {panel(domfig)}{panel(sizefig)}{panel(agfig)}
+<p class="sub"><b>Right-censoring provenance.</b> Every probe capped generation at <code>max_tokens</code>; any run that hit the cap is truncated, so its recorded length is a floor and the sample mean is a <b>lower bound</b> on the true E[R], not an estimate of it. Rows at or above {int(CENSOR_WARN*100)}% censored are flagged &mdash; use them as bounds or re-measure with a higher cap, don't feed them in as measured means.</p>
+<div class="panel"><table>
+<tr><th>model</th><th>domain</th><th>mean E[R]</th><th>censored</th><th>cap</th><th>status</th></tr>
+{''.join(len_trows)}
+</table></div>
 
 <h2>Appendix &middot; Monte-Carlo predictive intervals (chart 1a whiskers)</h2>
 <p class="sub">n={MC_DRAWS:,} draws/anchor, seeded so the page is reproducible. Priors: trainer MFU ~ per-config Triangular whose <b>mode is each preset's own data-grounded trainer MFU</b> (= 0.85&times; the Ultra-Scale Playbook / huggingface-nanotron node-matched RL-realistic best MFU; 0.85 corroborated independently by prime-rl and AReaL-7B) &mdash; so the deterministic "point" and the prior mode are the same number, and the point already reflects the calibrated MFU rather than a flat 0.40. Anchored on nanotron, not the step-time-implied MFU (which would be circular), so it sits above the implied MFU for high-shard anchors and the gap is the FSDP residual. Inference MFU ~ U{MFU_INF_RANGE}, sampled independently (physically they correlate, so this errs wide &mdash; the conservative direction). E[R] ~ Triangular &plusmn;{int(ER_PCT*100)}% about the measured value (a simple "the proxy measurement could be this far off the run's true E[R]" band; prime-rl pinned, its E[R] inverse-solved from its own throughput). Within-run length spread already enters the model exactly via E[R&sup2;]=E[R]&sup2;(1+cv&sup2;) (full second moment, tail included &mdash; not a 1-SD slice), so it is not resampled. <b>"explained?"</b> = does the published step time fall inside the 90% interval, i.e. can input uncertainty alone account for the gap? A <b>p95/p5 of ~1.00</b> means the anchor is broadcast-bound: its step time is set by weight volume and link speed, which neither MFU nor E[R] touches.</p>
@@ -767,7 +816,7 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 </table></div>
 
 <h2>Appendix &middot; Node/site caps by GPU family</h2>
-<p class="sub">Two independent physical caps on how a site can be built. <b>Export node cap</b> (BIS CCC): GPUs/node so the node stays under {H100_EQUIV} H100-equivalents of both TPP (compute = flops&times;16&nbsp;bit) and HBM (1,280&nbsp;GB) &mdash; whichever binds; this is the node size used in chart 2f. <b>Power envelope</b>: GPUs a site can run under a 1&nbsp;MW / 5&nbsp;MW draw (floor(MW / board&nbsp;W)) &mdash; a detectability-tier / site cap on total GPUs, separate from the node cap. The <b>Cerebras CS-4</b> row (per WSE-3 wafer; a rack = 3 wafers) is included to contrast a wafer-scale part against the cap regime &mdash; see the caveats below it.</p>
+<p class="sub">Two independent physical caps on how a site can be built. <b>Export node cap</b> (BIS CCC): GPUs/node so the node stays under {H100_EQUIV} H100-equivalents of both TPP (compute = flops&times;16&nbsp;bit) and HBM (1,280&nbsp;GB) &mdash; whichever binds; this is the node size used in chart 2f. <b>Power envelope</b>: GPUs a site can run under a 1&nbsp;MW / 5&nbsp;MW <b>facility</b> draw (floor(MW / (board&nbsp;W &times; {FACILITY_PUE:g})), i.e. power at the meter including host/NIC/conversion/cooling) &mdash; a detectability-tier / site cap on total GPUs, separate from the node cap. The <b>Cerebras CS-4</b> row (per WSE-3 wafer; a rack = 3 wafers) is included to contrast a wafer-scale part against the cap regime &mdash; see the caveats below it.</p>
 <div class="panel"><table>
 <tr><th>GPU</th><th>dense BF16 TFLOP/s</th><th>TPP/chip (TFLOP-bit/s)</th><th>HBM GB</th><th>board W</th><th>export node cap (GPUs/node)</th><th>GPUs @1MW</th><th>GPUs @5MW</th></tr>
 {''.join(f"<tr><td>{g}</td><td>{GPUS[g]['flops']/1e12:.0f}</td><td>{tpp_per_chip(g)/1e12:,.0f}</td><td>{GPUS[g]['hbm_gb']}</td><td>{GPUS[g]['watts']}</td><td>{CAP_NODE[g]}</td><td>{per_pow[g][1]:,}</td><td>{per_pow[g][2]:,}</td></tr>" for g in GFAM)}
@@ -790,9 +839,9 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 </table></div>
 
 <h2>Appendix &middot; Max achievable RL compute (by stock)</h2>
-<p class="sub">Same operating point as chart 2b (one row group per stock size), with the metrics a bar can't show: split, full per-stage time breakdown (T_step total / T_update / T_rollout+verify / T_broadcast), ACHIEVED overall-cluster MFU (hw-FLOPs/8N convention -- matches published RL-training MFU figures, e.g. prime-rl's 38%; divides actual FLOPs done by T_step &times; combined train+inference peak FLOPs/s, so an idling pool drags it down; NOT an echo of the mfu_train/mfu_inf config inputs), bottleneck, training steps.</p>
+<p class="sub">Same operating point as chart 2b (one row group per stock size), with the metrics a bar can't show: <b>GPUs used</b> (what the optimal split actually allocates, and its share of the stock available &mdash; the split is built from whole nodes, so a stock the node size does not divide cleanly leaves a remainder idle; the shortfall is nil at small stock and grows with node size), split, full per-stage time breakdown (T_step total / T_update / T_rollout+verify / T_broadcast), ACHIEVED overall-cluster MFU (hw-FLOPs/8N convention -- matches published RL-training MFU figures, e.g. prime-rl's 38%; divides actual FLOPs done by T_step &times; combined train+inference peak FLOPs/s, so an idling pool drags it down; NOT an echo of the mfu_train/mfu_inf config inputs), bottleneck, training steps.</p>
 <div class="panel"><table>
-<tr><th>stock</th><th>window</th><th>tr:inf</th><th>T_step</th><th>T_update</th><th>T_rollout</th><th>T_bcast</th><th>MFU</th><th>bottleneck</th><th>steps</th><th>max C_RL</th></tr>
+<tr><th>stock available</th><th>GPUs used</th><th>window</th><th>tr:inf</th><th>T_step</th><th>T_update</th><th>T_rollout</th><th>T_bcast</th><th>MFU</th><th>bottleneck</th><th>steps</th><th>max C_RL</th></tr>
 {''.join(stock_trows)}
 </table></div>
 """

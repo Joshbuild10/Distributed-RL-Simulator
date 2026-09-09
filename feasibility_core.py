@@ -45,7 +45,12 @@ KNOWN FIRST-CUT BIASES (documented; do not read absolutes as final):
     -- k=0 on-policy (serial), k=1 one-step off-policy (overlapped, default), k>=2 broadcasts every
     k steps (per-step broadcast /k). Its BENEFIT only: the sample-efficiency cost of staleness is
     not modelled, so large k reads as a free win. `compression` is now purely a quantization factor.
-  * Single-node inference only: weights must fit one node (no inference TP across nodes).
+  * Inference serving group: weights must fit ONE group of inf_tp tensor-parallel nodes (inf_tp_max=1
+    -> a single node, the decentralised case). The group pools HBM/bandwidth/FLOPs for one weight copy,
+    so tp divides the decode weight-streaming floor and lets bigger models fit; the solver picks the
+    smallest tp that wins, since a group is tp WHOLE nodes. The TP collectives themselves (AllReduce
+    per layer, AllToAll once KV shards past n_kv_heads) are NOT charged -- inf_tp_max stands in for
+    what the fabric can sustain.
 Time windows are ours; anchor them against Epoch's distributed-training feasibility model when
 writing.
 """
@@ -79,6 +84,11 @@ GPUS = {
 # capacity, so a table reading left-to-right tracks the axis that actually binds rollout.
 HIGH_END_GPUS = ("A100", "H100", "H200", "B200", "B300", "GB200", "GB300", "MI355X")
 GB, TB = 1e9, 1e12
+
+# Facility power multiplier on board TDP: hosts, networking, power conversion and cooling. Every
+# power figure in the model is a FACILITY draw, so a "1 MW site" means 1 MW at the meter, not 1 MW
+# of GPU board power. Set to 1.0 to quote raw board watts instead.
+FACILITY_PUE = 1.6
 
 # Granularity (and minimum) for right-sizing BOTH pools: trainer replica nodes and single inference
 # nodes downsize in whole GPU_STEP chunks (16 = a good-topology unit), never to an arbitrary count.
@@ -120,9 +130,9 @@ def node_gpus_tpp_cap(gpu, h100_equiv=16, cap_by_memory=True):
     return max(1, min(n_tpp, n_hbm))
 
 
-def node_gpus_power_cap(gpu, node_kw):
-    """Max chips per node under a per-node power budget (kW), from board TDP. >=1."""
-    return max(1, int(node_kw * 1000 // GPUS[gpu]["watts"]))
+def node_gpus_power_cap(gpu, node_kw, pue=FACILITY_PUE):
+    """Max chips per node under a per-node FACILITY power budget (kW). Board TDP x pue. >=1."""
+    return max(1, int(node_kw * 1000 // (GPUS[gpu]["watts"] * pue)))
 
 
 def effective_node_gpus(gpus_per_node, stock_gpus):
@@ -275,6 +285,7 @@ BASELINE_BATCH = dict(prompts_per_batch=32, responses_per_prompt=16)
 @dataclass
 class FeasConfig:
     target_c_rl: float
+
     # Hardware
     gpu: str = "H100"
     gpus_per_node: int = 16             # Inference node
@@ -282,6 +293,7 @@ class FeasConfig:
     wan_mbps: float = 1000.0
     compression: float = 16.0           # weight-sync compression.
     sync_interval: float = 1            # Off-policy staleness degree k
+    inf_tp_max: int = 1                 # Largest tensor-parallel serving group the fabric allows (nodes/group).
 
     # RL run config (per-step compute)
     model: ModelSpec = field(default_factory=lambda: MODELS[DEFAULT_MODEL])
@@ -303,9 +315,9 @@ class FeasConfig:
     # Infrastructure
     gpu_hr_usd: float = 2.0
     stock_gpus: int = 1_500_000
-    site_power_mw: float = 5.0         # per-site cap (detectability tier)
+    site_power_mw: float = 5.0         # per-site FACILITY power cap, MW (detectability tier)
 
-    def build(self, n_train_gpus, n_inf_gpus):
+    def build(self, n_train_gpus, n_inf_gpus, tp=1):
         # Trainer: whole train_gpus_per_node-GPU replica nodes, or ONE right-sized node (<= that) when
         # a single node suffices. n_shard = the node's own GPUs -> each node holds a full replica.
         tnode_max = self.train_gpus_per_node
@@ -317,9 +329,14 @@ class FeasConfig:
         # Inference: whole gpus_per_node nodes, or ONE downsized node (>= GPU_STEP, <= gpus_per_node)
         # when a single node suffices -- so a big centralised (e.g. NVL72) node isn't forced to spend
         # all 72 GPUs when fewer keep rollout off the critical path.
+        # With tp > 1 the pool is allocated in whole tp-node serving groups instead.
         inode_max = self.gpus_per_node
+        tp = max(1, int(tp))
         n_inf_gpus = max(GPU_STEP, int(n_inf_gpus))
-        if n_inf_gpus <= inode_max:
+        if tp > 1:
+            inode = inode_max
+            n_inf_nodes = max(tp, (n_inf_gpus // (tp * inode_max)) * tp)
+        elif n_inf_gpus <= inode_max:
             inode, n_inf_nodes = n_inf_gpus, 1
         else:
             n_inf_nodes = -(-n_inf_gpus // inode_max); inode = inode_max
@@ -344,7 +361,7 @@ class FeasConfig:
             train_hw=HWSpec("trainer", n_nodes=n_train_nodes, gpus_per_node=train_node,
                             mfu=self.mfu_train, penalty_para=1.0, n_shard=train_node, **train_nh),
             inf_hw=HWSpec("inference", n_nodes=n_inf_nodes, gpus_per_node=inode,
-                          mfu=self.mfu_inf, bw_eff=0.85, **inf_nh),
+                          mfu=self.mfu_inf, bw_eff=0.85, inf_tp=tp, **inf_nh),
             net=NetSpec(bandwidth=self.wan_mbps * 1e6 / 8, latency=0.5),
             verify=VerifySpec(mode="rule", seconds_per_rollout=0.5, n_verifier_workers=10000),
         )
@@ -374,13 +391,13 @@ def gpus_of(r):
     return s.train_hw.n_nodes * s.train_hw.gpus_per_node + s.inf_hw.n_nodes * s.inf_hw.gpus_per_node
 
 
-def total_time(cfg, n_train_gpus, n_inf_gpus):
+def total_time(cfg, n_train_gpus, n_inf_gpus, tp=1):
     """Wall-clock to finish; inf if the config can't run:
-      - inference weights don't fit a node (ro.model_fits) -> can't shard inference, simulate() NaNs;
+      - inference weights don't fit a serving group (ro.model_fits) -> simulate() NaNs;
       - a replica + resident activation doesn't fit ONE trainer node (mem.fits) -> would need cross-node
         model parallelism, which this model disallows, so the config is inadmissible."""
     try:
-        r = simulate(cfg.build(n_train_gpus, n_inf_gpus))
+        r = simulate(cfg.build(n_train_gpus, n_inf_gpus, tp))
     except (ValueError, ZeroDivisionError, OverflowError):
         return float("inf"), None
     if (r is None or not math.isfinite(r.t_step) or r.t_step <= 0
@@ -407,55 +424,103 @@ def _pack(tt, r):
             (gpus_of(r) - r.scenario.inf_hw.n_nodes * r.scenario.inf_hw.gpus_per_node) / gpus_of(r))
 
 
-def min_gpus_for_tsb(cfg, tsb, budget=None):
-    """Smallest (trainer, inference) GPU counts whose EVERY stage fits the per-step budget tsb.
-    Inference: min GPUs with rollout+verify <= tsb (bisection; rollout falls with inference).
-    Trainer:   min GPUs with update <= tsb, floored at the replica's one-node memory fit.
-    Returns dict(n_train, n_inf, gpus, tt, r) or None if tsb is unreachable inside `budget`
-    (defaults to cfg.stock_gpus) -- e.g. the broadcast floor alone already exceeds tsb."""
+def _tp_candidates(cfg):
+    """Serving-group sizes the solver may use, smallest first: powers of two up to inf_tp_max."""
+    cap, out, t = max(1, cfg.inf_tp_max), [], 1
+    while t <= cap:
+        out.append(t); t *= 2
+    if out[-1] != cap:
+        out.append(cap)
+    return out
+
+
+def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp):
+    """min_gpus_for_tsb at ONE serving-group size, against per-stage budgets. See that docstring."""
     step = GPU_STEP
-    stock = cfg.stock_gpus if budget is None else budget
     per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train
     r16 = lambda x: -(-int(math.ceil(x)) // step) * step   # round up to a whole GPU_STEP
-    if not (tsb > 0 and math.isfinite(tsb)):
-        return None
+    grp = tp * cfg.gpus_per_node                           # a group is tp whole nodes
+    inf_min = step if tp == 1 else grp
 
     def probe(n_inf):                                      # stage times here are trainer-independent
-        r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf))
+        r = simulate(cfg.build(cfg.train_gpus_per_node, n_inf, tp))
         if not r.ro.model_fits:
             return None
         pgh = r.scenario.train_hw.node_hbm / r.scenario.train_hw.gpus_per_node
-        return dict(roll=r.stages["rollout+verify"], bc=r.t_bc,
+        return dict(roll=r.stages["rollout+verify"],
                     mem_floor=r16(r.mem.total / pgh), c_update=r.tc.c_update)
 
-    p0 = probe(step)
-    if p0 is None or p0["bc"] > tsb:                       # broadcast floor alone busts the budget
+    p0 = probe(inf_min)
+    if p0 is None:
         return None
     max_inf = ((stock - p0["mem_floor"]) // step) * step   # leave room for at least a memory-floor trainer
-    if max_inf < step:
+    if max_inf < inf_min:
         return None
     pmax = probe(max_inf)
-    if pmax is None or pmax["roll"] > tsb:
-        return None                                        # even max inference can't get rollout under tsb
-    if p0["roll"] <= tsb:
-        n_inf = step
+    if pmax is None or pmax["roll"] > roll_b:
+        return None                                        # even max inference can't get rollout under budget
+    if p0["roll"] <= roll_b:
+        n_inf = inf_min
     else:
-        lo, hi = step, max_inf                             # lo fails, hi fits
+        lo, hi = inf_min, max_inf                          # lo fails, hi fits
         while hi - lo > step:
             mid = max(lo + step, (((lo + hi) // 2) // step) * step)
-            if probe(mid)["roll"] <= tsb:
+            if probe(mid)["roll"] <= roll_b:
                 hi = mid
             else:
                 lo = mid
         n_inf = hi
     p = probe(n_inf)
-    n_train = max(p["mem_floor"], r16(p["c_update"] / (per_gpu_flops * tsb)))
+    n_train = max(p["mem_floor"], r16(p["c_update"] / (per_gpu_flops * upd_b)))
     if n_train + n_inf > stock:
         return None
-    tt, r = total_time(cfg, n_train, n_inf)
-    if r is None:
+    # Re-check the BUILT allocation, not the requested one: build() rounds the trainer up to whole
+    # replica nodes and inference into whole tp-groups, so both can overshoot the raw n_train+n_inf
+    # test above. total_time also returns a finite-r/infinite-tt result when memory doesn't fit.
+    tt, r = total_time(cfg, n_train, n_inf, tp)
+    if r is None or not math.isfinite(tt) or gpus_of(r) > stock:
         return None
-    return dict(n_train=n_train, n_inf=n_inf, gpus=gpus_of(r), tt=tt, r=r)
+    return dict(n_train=n_train, n_inf=n_inf, tp=tp, gpus=gpus_of(r), tt=tt, r=r)
+
+
+# How a step composes decides how its time budget is divided between the stages:
+#   k >= 1 (off-policy, overlapped) -- t_step = max(stages), so rollout and update EACH get the whole
+#           budget and the broadcast just has to fit under it too (model.py already divides the
+#           per-step broadcast by k, so a larger k only relaxes that check).
+#   k = 0  (on-policy, serial)      -- t_step = SUM(stages), so the budget must be PARTITIONED. The
+#           broadcast is GPU-independent and comes off the top; the remainder is swept between the two
+#           compute stages, since which of them is cheaper to speed up varies by config.
+SERIAL_SPLITS = (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+
+
+def min_gpus_for_tsb(cfg, tsb, budget=None):
+    """Smallest (trainer, inference) GPU counts whose step fits the per-step budget tsb.
+    Inference: min GPUs with rollout+verify <= its budget (bisection; rollout falls with inference).
+    Trainer:   min GPUs with update <= its budget, floored at the replica's one-node memory fit.
+    Tries every allowed serving-group size (and, when serial, every budget split) and keeps the
+    CHEAPEST, so tp only rises when a bigger group actually buys hardware -- a tp-node group is a real
+    granularity floor, so small runs stay at tp=1. Returns dict(n_train, n_inf, tp, gpus, tt, r) or
+    None if tsb is unreachable inside `budget` (defaults to cfg.stock_gpus)."""
+    if not (tsb > 0 and math.isfinite(tsb)):
+        return None
+    stock = cfg.stock_gpus if budget is None else budget
+    bc = simulate(cfg.build(cfg.train_gpus_per_node, cfg.gpus_per_node)).t_bc   # GPU-independent
+    if cfg.sync_interval >= 1:
+        if bc > tsb:
+            return None                                    # broadcast floor alone busts the budget
+        splits = [(tsb, tsb)]
+    else:
+        rem = tsb - bc
+        if rem <= 0:
+            return None
+        splits = [(a * rem, (1 - a) * rem) for a in SERIAL_SPLITS]
+    best = None
+    for tp in _tp_candidates(cfg):
+        for roll_b, upd_b in splits:
+            sol = _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp)
+            if sol is not None and (best is None or sol["gpus"] < best["gpus"]):
+                best = sol
+    return best
 
 
 def optimal_split(cfg, total_gpus, fracs=None):
@@ -610,10 +675,11 @@ def batch_split(total):
 HBM_MULTS = (0.25, 0.5, 1.0, 2.0, 4.0)
 
 
-def sites_power(cfg, gpus):
-    w = GPUS[cfg.gpu]["watts"]
+def sites_power(cfg, gpus, pue=FACILITY_PUE):
+    """(sites at the per-site cap, total facility MW). Both sides are facility draw: board TDP x pue."""
+    w = GPUS[cfg.gpu]["watts"] * pue
     gpus_per_site = cfg.site_power_mw * 1e6 / w
-    return gpus / gpus_per_site, gpus * w / 1e6   # (n_sites at the cap, total MW)
+    return gpus / gpus_per_site, gpus * w / 1e6
 
 
 def split_for(cfg, total_gpus):
@@ -691,6 +757,8 @@ def config_lines(cfg):
         f"model: {cfg.model.name}",
         f"gpu: {cfg.gpu} (inference {cfg.gpus_per_node} GPUs/node, "
         f"update {cfg.train_gpus_per_node} GPUs/node, full replica per node)",
+        f"inf_tp_max: {cfg.inf_tp_max} node(s)/serving group"
+        f"{' (tensor-parallel allowed; solver picks the smallest that wins)' if cfg.inf_tp_max > 1 else ' (no cross-node inference sharding)'}",
         f"wan_mbps: {cfg.wan_mbps:g}",
         f"compression: {cfg.compression:g}x",
         f"sync_interval (off-policy k): {cfg.sync_interval:g} "
@@ -706,5 +774,5 @@ def config_lines(cfg):
         f"b_weights_inf: {cfg.b_weights_inf:g} B/param  b_kv: {cfg.b_kv:g} B",
         f"gpu_hr_usd: ${cfg.gpu_hr_usd:g}",
         f"stock_gpus: {cfg.stock_gpus:,}",
-        f"site_power_mw: {cfg.site_power_mw:g}",
+        f"site_power_mw: {cfg.site_power_mw:g} (facility draw, board TDP x {FACILITY_PUE:g})",
     ]
