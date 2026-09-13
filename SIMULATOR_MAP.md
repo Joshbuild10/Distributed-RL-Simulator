@@ -1,6 +1,6 @@
 # SIMULATOR_MAP — spec ↔ code reconciliation
 
-> **DRAFT, auto-assembled from the code on 2026-08-17; refreshed 2026-09-09.** Intended to be redrafted by hand.
+> **DRAFT, auto-assembled from the code on 2026-08-17; refreshed 2026-09-09 (layout, A-viii, A-x).** Intended to be redrafted by hand.
 > Purpose: satisfy PROJECT_CONTEXT §4 ("inventory actual modules/functions vs the spec, flag
 > discrepancies rather than silently fixing them"). Numbers here are reproduced by
 > `python -m validation.validate`.
@@ -12,12 +12,13 @@
 | `specs.py` | Dataclasses: `ModelSpec`, `RLSpec`, `AlgoSpec`, `HWSpec`, `NetSpec`, `VerifySpec`, `Scenario` |
 | `model.py` | Analytic core: `training_compute`, `training_time`, `training_memory`, `rollout_terms`, `verify_time`, `broadcast_time`, `n_steps`, `simulate` |
 | `validation/presets.py` | Published run scenarios (INTELLECT-2/3, prime-rl ×2, AReaL ×4) + hardware/model constants |
-| `validation/solvers.py` | Inverse calibration (`solve_for_response_len`, `solve_for_capacity`, `solve_for_nodes`) |
+| `validation/solvers.py` | Inverse calibration (`solve_for_response_len`, `solve_for_capacity`, `solve_for_mfu`) |
 | `validation/reporting.py` | `report()`, `CALIBRATION_METRICS`, `sweep_response_len()` |
 | `validation/validate.py` | Entry point: report every scenario + inverse-calibration summary |
 | `feasibility_core.py` | `FeasConfig`, `evaluate`, `min_gpus_for_tsb`, `min_cluster`, `optimal_split`, model/GPU/target registries, formatters |
 | `feasibility.py` | Sweeps, tables, CSV writers, CLI |
-| `experiments/` | Measurement campaign + figure generators (gitignored for now) |
+| `results/plot_dashboard.py` | The whole `results/dashboard.html` figure set (inline SVG, no matplotlib) |
+| `experiments/` | Measurement campaign, `svgkit.py` chart primitives, `lengths_io.py` (gitignored for now) |
 
 ## Spec → implementation
 
@@ -39,7 +40,7 @@
 | `T_verify` rule- and model-based | `model.verify_time` | ✅ |
 | `T_broadcast = vol/bw + latency` | `model.broadcast_time` | ✅ one-directional (Rahman's has ×2) |
 | Policy age (= `sync_interval`) | `model.simulate` | ✅ reported as `policy_age`; **not wired into `N_steps`** |
-| Mode: target time/FLOP → required nodes | `feasibility_core.min_cluster`, `solvers.solve_for_nodes` | ✅ |
+| Mode: target time/FLOP → required nodes | `feasibility_core.min_cluster` | ✅ |
 | Mode: optimal trainer:inference split | `feasibility_core.optimal_split` | ✅ derived exactly (no preset fraction grid) |
 | Inference tensor parallelism across nodes | `model.rollout_terms`, `HWSpec.inf_tp` | ✅ serving group of `inf_tp` nodes, one weight copy |
 
@@ -54,7 +55,16 @@
 3. **Two throughput conventions.** Stage-local (`tok_s_train`, `tok_s_inf`) vs whole-step
    (`tok_s_inf_achieved`). Both are reported; `CALIBRATION_METRICS` documents which one each
    published figure is compared against and why.
-4. **`oversample_override` precedence.** The override wins over `success_rate` and defaults to 1,
+4. **Trainer node = one full replica.** Each update node holds the whole model (weights + grads +
+   optimiser + the resident activation), sharded only *within* the node (`n_shard` = the node's own
+   GPUs). Multiple trainer nodes are data-parallel replicas, so there is no cross-node model
+   parallelism and no inter-node sharding cost. Nodes are up to `train_gpus_per_node` (128) GPUs; a
+   SINGLE trainer node is right-sized DOWN in `GPU_STEP` (16) chunks to the minimum that both fits
+   the replica and keeps the update off the critical path. `act_site_parallel=True` shards the
+   activation within the node (so it does not grow with node size); the data-parallel per-GPU path
+   (`False`) is kept for the calibrated validation presets. Not modelled, and would only tighten
+   the fit: the largest gathered FSDP unit, collective/workspace buffers, master-copy dtype.
+5. **`oversample_override` precedence.** The override wins over `success_rate` and defaults to 1,
    so the derived zero-advantage path only runs when explicitly enabled — measured ω is preferred
    to a derived one, and the single-`p` form understates ω under bimodal difficulty.
 
@@ -69,7 +79,8 @@
 | A-v | No inter-learner communication term | Multiple trainer nodes are data-parallel replicas with no sync cost (`penalty_para = 1.0`); assumes a co-located learner. Would not hold for WAN-separated learner sites |
 | A-vi | Staleness quality penalty is a diagnostic | `policy_age` reports the configured `k`; its sample-efficiency cost is not wired into `N_steps` (would create a fixed point) |
 | A-vii | Heterogeneous hardware only via lumped `capacity_mult` | Straggler/length-variance tail penalty designed, not coded |
-| A-viii | Power accounting is **board watts only** | `node_gpus_power_cap`/`sites_power` omit host/network/cooling; a facility factor (≈1.6) is applied in prose but not in code |
+| A-viii | Facility power factor is a **flat constant** | `FACILITY_PUE = 1.6` multiplies board TDP in `node_gpus_power_cap`/`sites_power`, so every power figure is draw at the meter. One number stands in for host/network/conversion/cooling across every GPU family and site design |
+| A-x | Inference sizing probes a `GPU_STEP` node first | `_min_gpus_at_tp`/`optimal_split` test `model_fits` at a 16-GPU node, so a model that fits only a FULL node (e.g. Kimi-K3 on a 72-GPU node) is reported `no-fit`. Latent for every published figure (Llama-405B/H100 fits at 16); see the review note |
 | A-ix | `stock_gpus` counts **physical chips** | Not renormalised to H100-equivalents when `gpu` changes, so cross-family sweeps compare fixed chip counts, not fixed compute |
 
 ## Unit conventions

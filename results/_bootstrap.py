@@ -1,12 +1,11 @@
 """
-Put the repo root AND experiments/ on sys.path, so scripts in this directory can import
-`specs` / `model` / `feasibility_core` (repo root) as well as `svgkit` / `lengths_io`
-(experiments/ -- plot_dashboard.py still bare-imports those; they weren't moved here since
-other experiments/ scripts also depend on them). Every script here is run directly
+Put the repo root on sys.path so scripts in this directory can import `specs` / `model` /
+`feasibility_core` / `svgkit` / `lengths_io`. Every script here is run directly
 (`python results/foo.py`), so sys.path[0] is this directory and a plain `import _bootstrap`
-always resolves.
+always resolves. experiments/ is appended too, but only so the gitignored measurement
+scripts stay importable -- nothing in results/ needs it.
 
-Import for its side effect, before any repo-root/experiments import:
+Import for its side effect, before any repo-root import:
 
     import _bootstrap  # noqa: F401
 """

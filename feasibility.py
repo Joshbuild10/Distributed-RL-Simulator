@@ -32,7 +32,8 @@ from feasibility_core import (
     all_targets, cell_text, config_lines, evaluate, fmt_num, fmt_ratio, fmt_time,
     min_wall_full_stock, model_targets, n_steps, optimal_split, per_step_flop, fmt_rate,
     required_bcast_mbps, sites_power, smallest_fitting_gpu, split_for, total_time, with_cfg, GB,
-    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus, gpus_of, FACILITY_PUE,
+    tpp_per_chip, node_gpus_tpp_cap, node_gpus_power_cap, effective_node_gpus, max_compute_operating_point,
+    max_achievable_split, steps_and_c_rl, gpus_of, FACILITY_PUE,
 )
 
 
@@ -166,72 +167,6 @@ def policy_framing(base):
     print("     pre-training, not the RL stage. Core governance gap.")
 
 
-def max_achievable_split(base):
-    """The (T_step, nt, ni, r, frac) at the FULL stock that minimises step time. Reused by both
-    the printed table and the CSV writer -- one optimal_split() call answers both, since
-    per_step_flop is node-count-independent and total_time is ~monotone non-increasing in node
-    count (the same property min_cluster's bisection relies on): more nodes never hurt, so the
-    max-throughput operating point is always "use the whole stock, split it optimally", never a
-    smaller subset."""
-    return optimal_split(base, base.stock_gpus)
-
-
-def max_compute_operating_point(cfg, stock=None):
-    """Everything about the max-throughput operating point that does NOT depend on the time
-    window: split, T_step (+ the T_update/T_rollout+verify/T_broadcast breakdown), the ACHIEVED
-    overall MFU of the whole allocated cluster, bottleneck, per-step FLOP. Computed ONCE per
-    (cfg, stock) and shared across every window a caller loops over, so sweeping windows never
-    re-runs optimal_split(). `stock` overrides cfg.stock_gpus (for the by-stock sweep); None uses
-    cfg's own stock_gpus. Returns None if the model doesn't fit a single node at all.
-
-    MFU HERE IS GENUINELY DERIVED, NOT AN ECHOED INPUT: r.mfu_model/r.mfu_hw (model.py) reduce
-    algebraically to (mfu_train input) x (a fixed recompute-coefficient constant) -- they are
-    IDENTICAL at every stock size because they only ever look at the trainer's OWN t_update, never
-    at whether the trainer or inference pool sits idle waiting on the other. The overall MFU below
-    instead divides total ACTUAL FLOPs (train + rollout, both pools) by (T_step x the COMBINED
-    peak FLOPs/s of every GPU allocated, train+inference) -- T_step is the max/sum across stages,
-    so a pool that finishes early and idles while the OTHER stage is the bottleneck correctly
-    drags this number down. It genuinely varies with the split/bottleneck (e.g. craters when
-    broadcast dominates at very large stock), unlike the flat mfu_model/mfu_hw echo."""
-    c = cfg if stock is None else with_cfg(cfg, stock_gpus=stock)
-    # Cap the node to the fleet (a node can't exceed the stock, and disaggregation needs >=2 nodes):
-    # without this a stock smaller than ~2 configured nodes silently over-allocates whole nodes and
-    # reports a fleet far larger than `stock`. No-op whenever the configured node already fits.
-    eff = effective_node_gpus(c.gpus_per_node, c.stock_gpus)
-    if eff != c.gpus_per_node:
-        c = with_cfg(c, gpus_per_node=eff)
-    sol = max_achievable_split(c)
-    if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
-        return None
-    tt, nt, ni, r, frac = sol
-    # BUG (fixed): `tt` is optimal_split's total_time() -- the wall-clock to finish cfg's OWN
-    # target_c_rl at this split (n_steps(cfg) * r.t_step) -- NOT the per-step time. Using it here
-    # made every "T_step" in this table off by a constant factor of n_steps(cfg) for whatever
-    # target_c_rl happened to be set on cfg (e.g. 954x too large at the default 6e23), which made
-    # every derived steps/max-C_RL number ~954x too SMALL. The real per-step time is r.t_step.
-    pf = per_step_flop(c)   # node-count-independent, unaffected by stock; == r.tc.c_update + r.ro.c_rollout_total
-    s = r.scenario
-    train_peak = s.train_hw.n_nodes * s.train_hw.flops   # FLOPs/s, hardware peak (no MFU derating)
-    inf_peak = s.inf_hw.n_nodes * s.inf_hw.flops
-    total_peak = train_peak + inf_peak
-    # model-FLOPs convention: strip the recompute coefficient off the training term only (inference
-    # is already forward-only, no recompute distinction) -- mirrors model.py's own model_flops calc.
-    model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
-    return dict(gpus=gpus_of(r), n_total=nt + ni, nt=nt, ni=ni, frac=frac,
-                t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
-                t_broadcast=r.t_bc, bottleneck=r.bottleneck,
-                mfu_model=model_flops_step / (r.t_step * total_peak),
-                mfu_hw=pf / (r.t_step * total_peak),
-                per_step_flop=pf)
-
-
-def steps_and_c_rl(op, window_s):
-    """Window-dependent numbers from an operating point: (steps, max achievable C_RL). Pure
-    arithmetic -- no simulate() calls -- so sweeping many windows over one op is free."""
-    steps = window_s / op["t_step"]
-    return steps, op["per_step_flop"] * steps
-
-
 def max_compute_table(base, windows_d=(30, 90, 180, 720)):
     """THE INVERSE of the A1 table: instead of "given a target C_RL, what's the min cluster",
     this asks "given the FULL STOCK (+ model + RL/algo settings), what's the MOST RL compute
@@ -258,8 +193,7 @@ def max_compute_table(base, windows_d=(30, 90, 180, 720)):
     print("     pool idling on the OTHER stage's bottleneck correctly drags this down; NOT an echo")
     print("     of the mfu_train/mfu_inf config inputs. hw-FLOPs (8N, includes recompute) is the")
     print("     convention published RL-training MFU figures use, e.g. prime-rl's 38%; the model-")
-    print("     FLOPs (6N, pretraining-style) figure is also computed -- see mfu_model in the CSV --")
-    print("     but dropped from this printout as a second number that rarely changes the story.)")
+    print("     FLOPs (6N) figure is in the CSV as mfu_model.)")
     thr = op["per_step_flop"] / op["t_step"]
     print(f"  throughput: {thr:.3e} FLOP/s  =  {thr*86400:.3e} FLOP/day")
     print(f"\n  {'window':>8}{'steps':>12}{'max C_RL':>14}   covers")
@@ -998,9 +932,7 @@ def main(argv=None):
         print("floor (days to expend the FLOPs) and the optimal trainer:rollout split.")
         print_config_block(base)
         frontier_diagnosis(base)
-        # Three largest real model targets (the latency wall is a big-target phenomenon). Was a
-        # hardcoded name tuple that included "DeepSeek-R1" -- commented out of MODEL_TARGETS, so
-        # the `if k in every` guard silently dropped it and this table quietly showed 2 rows.
+        # Three largest real model targets -- the latency wall is a big-target phenomenon.
         batch_feasibility_table(base, model_targets(top=3), window_d=windows[-1])
         batch_group_table(base, m_targets, window_d=w180)
         batch_compare_table(base, m_targets, windows)

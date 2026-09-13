@@ -7,8 +7,7 @@ import math
 from typing import Callable, Optional
 
 from specs import Scenario
-from model import (simulate, with_response_len, with_capacity_mult, with_n_nodes,
-                   with_mfu_scale)
+from model import simulate, with_response_len, with_capacity_mult, with_mfu_scale
 
 
 def _bisect(f: Callable[[float], float], lo: float, hi: float,
@@ -123,11 +122,3 @@ def implied_mfu_report(scenarios, width=104):
     print("  prime-rl returns ~its published 0.385 (MFU disclosed) -> method validated. Implied MFU")
     print("  falling with n_shard across AReaL 7B/14B/32B (48->64->96) is the FSDP-penalty signature.")
 
-
-def solve_for_nodes(s: Scenario, target_step: float, max_nodes: int = 100_000) -> Optional[int]:
-    """What inference node count brings rollout+verify down to the target step time?"""
-    for n in range(1, max_nodes + 1):
-        r = simulate(with_n_nodes(s, n))
-        if r.stages["rollout+verify"] <= target_step:
-            return n
-    return None

@@ -204,7 +204,7 @@ def primerl_deepdive() -> Scenario:
 # Architectures: DeepSeek-R1-Distill-Qwen2.5-{1.5B,7B,14B,32B}.
 # CAVEAT: AReaL does not publish the average response length E[R]; the E[R] here is
 # assumed, so each run is really validated by whether the E[R] that reproduces the
-# published step time comes out plausible (< the 32K cap) -- see drl_model.py.
+# published step time comes out plausible (< the 32K cap) -- see validation/REPORT.md.
 
 R1_QWEN_1_5B = ModelSpec(
     name="R1-Distill-Qwen-1.5B", is_moe=False,

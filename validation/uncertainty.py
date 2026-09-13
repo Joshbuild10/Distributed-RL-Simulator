@@ -2,15 +2,12 @@
 """
 uncertainty.py -- Monte-Carlo predictive intervals on the validation anchors' step time.
 
-WHY THIS EXISTS. The point predictions in validate.py / dashboard chart 1a answer "how far off
-are we", which is the wrong question on its own: several anchors' inputs are genuinely uncertain
-(nobody published their MFU, and E[R] is measured on a proxy checkpoint), so a residual of -40%
-might be a modelling gap or might be entirely input uncertainty. Sampling the uncertain inputs
-and reporting a predictive INTERVAL converts each anchor from "off by X%" into "the published
-number does / does not fall inside what our input uncertainty can explain" -- which is the claim
-the writeup actually needs to make about the FSDP and MoE/multi-turn residuals.
-
-model.py stays deterministic on purpose; all the distribution machinery lives here.
+WHY THIS EXISTS. Several anchors' inputs are genuinely uncertain -- nobody published their MFU and
+E[R] is measured on a proxy checkpoint -- so a -40% residual might be a modelling gap or might be
+input uncertainty alone. A predictive INTERVAL converts each anchor from "off by X%" into "the
+published number does / does not fall inside what our input uncertainty can explain", which is the
+claim the writeup needs for the FSDP and MoE/multi-turn residuals. model.py stays deterministic on
+purpose; all the distribution machinery lives here.
 
 WHAT IS VARIED (independently -- see NOTE ON INDEPENDENCE):
   train_hw.mfu  ~ per-config Triangular, mode = the preset's own trainer MFU (see mfu_train_tri).
@@ -25,15 +22,14 @@ WHAT IS VARIED (independently -- see NOTE ON INDEPENDENCE):
                   E[R] is measured on a proxy model/checkpoint (and RL lengthens responses). prime-rl
                   is pinned (PINNED_ER): its E[R] was inverse-solved from its own throughput.
 
-WHAT IS NOT VARIED: response_len_cv. The within-run length spread already enters simulate() EXACTLY
-via er2 = Var + E[R]^2 = E[R]^2(1+cv^2), the full second moment (tail included -- not a 1-SD/66%
-slice), so its effect on the mean step time needs no resampling. (An earlier build also sampled the
-cv PARAMETER; dropped as unnecessary -- it moved short-E[R] anchors ~4% and changed no verdict.)
+WHAT IS NOT VARIED: response_len_cv. The within-run spread already enters simulate() EXACTLY via
+er2 = E[R]^2(1+cv^2), the full second moment (tail included, not a 1-SD slice), so its effect on the
+mean step time needs no resampling. Sampling the cv parameter too moved short-E[R] anchors ~4% and
+changed no verdict.
 
-NOTE ON INDEPENDENCE: trainer and inference MFU are physically correlated (same engineering
-team, same stack). Sampling them independently therefore widens the interval relative to truth --
-the conservative direction for a claim of the form "even allowing for input uncertainty, this
-residual survives". Stated rather than silently assumed.
+NOTE ON INDEPENDENCE: trainer and inference MFU are physically correlated (same team, same stack),
+so sampling them independently widens the interval relative to truth -- the conservative direction
+for a claim of the form "even allowing for input uncertainty, this residual survives".
 
 NOTE ON THE INFERENCE PRIOR: U(0.10, 0.40) has mean 0.25 while the presets carry mfu_inf=0.25-0.40,
 so for a ROLLOUT-BOUND anchor the MC mean can sit BELOW the deterministic point. Intended (the old
@@ -103,9 +99,8 @@ def mfu_train_tri(sc):
     that shape: a hard ceiling with a tail down.
 
     EXCEPTION: PINNED_MFU_TRAIN anchors (prime-rl) skip all of the above -- their mode IS the
-    published MFU, not an estimate, so the triple degenerates to (mode, mode, mode) and
-    random.triangular returns that constant every draw (low==high short-circuits before the
-    low/high spread is computed)."""
+    published MFU, so the triple degenerates to (mode, mode, mode) and random.triangular returns
+    that constant every draw."""
     mode = sc.train_hw.mfu
     if sc.name in PINNED_MFU_TRAIN:
         return (mode, mode, mode)

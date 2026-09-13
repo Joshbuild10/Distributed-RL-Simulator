@@ -28,6 +28,7 @@ from feasibility_core import (FeasConfig, MODELS, POLICY_THRESHOLDS, GPUS, HIGH_
                               smallest_fitting_gpu, total_time, optimal_split, per_step_flop,
                               required_bcast_mbps, config_lines, node_gpus_tpp_cap,
                               tpp_per_chip, node_gpus_power_cap, effective_node_gpus, FACILITY_PUE,
+                              max_compute_operating_point as max_op_at_stock, steps_and_c_rl,
                               with_cfg as _with, split_for as _split, gpus_of,
                               fmt_time as _ft, fmt_num as _fn, fmt_ratio as _tr, fmt_rate)
 
@@ -54,28 +55,23 @@ for lab, sc in CAL_SC:
     if pub:
         CAL.append((lab, r.t_step, pub, (r.t_step - pub) / pub * 100))
 
-# Monte-Carlo predictive intervals: trainer/inference MFU (never published by any anchor) and
-# E[R] (measured on proxy checkpoints) are genuinely uncertain, so a bare residual can't
-# distinguish "modelling gap" from "input uncertainty". Seeded per anchor -- unseeded draws would
-# change the HTML on every regeneration. See validation/uncertainty.py for the priors and the
-# per-anchor E[R] provenance tiers.
+# Monte-Carlo predictive intervals: MFU (never published by any anchor) and E[R] (measured on proxy
+# checkpoints) are genuinely uncertain, so a bare residual cannot separate a modelling gap from
+# input uncertainty. Seeded per anchor, else the HTML churns on every regeneration. Priors and the
+# per-anchor E[R] provenance tiers are in validation/uncertainty.py.
 MC = {lab: mc_step_time(sc) for lab, sc in CAL_SC}
 
-# One panel per anchor, each with its own zero-based LINEAR axis. The old single log-scaled
-# grouped bar chart spanned ~200s..1900s of published step time, which compressed every
-# predicted/published pair into near-identical heights -- a 2x miss read as a rounding error.
-# Bar = MC MEAN (not the deterministic point value), whiskers = p5..p95.
+# One panel per anchor, own zero-based LINEAR axis: published step time spans ~200s..1900s, which a
+# shared log axis compresses until a 2x miss reads as rounding. Bar = MC mean, whiskers = p5..p95.
 cal_bars = small_multiples([(lab, MC[lab]["mean"], pub, MC[lab]["p5"], MC[lab]["p95"])
                             for lab, mdl, pub, err in CAL],
                            "1a. Validation -- MC mean predicted vs published step time, whiskers = 90% "
                            "predictive interval",
                            ylab="step time (s)")
-# 1b bar stays on the DETERMINISTIC point prediction on purpose: that error % is the number quoted
-# throughout the project's calibration history (prime-rl ~0%, AReaL-32B -72%, ...), and rebasing
-# it on the MC mean would silently make every previously-recorded figure incomparable. The whisker
-# adds the MC 90% interval mapped to error % -- so each row shows the point residual AND the range
-# input uncertainty can move it to. A whisker that fails to cross 0 = a residual uncertainty can't
-# explain (the same "explained?" verdict as the MC appendix, shown geometrically).
+# 1b stays on the DETERMINISTIC point prediction: that error % is the number quoted throughout the
+# project's calibration history, so rebasing it on the MC mean would make past figures incomparable.
+# The whisker adds the MC 90% interval in error-% terms, so a whisker that fails to cross 0 is a
+# residual input uncertainty cannot explain -- the MC appendix's "explained?" verdict, geometrically.
 cal_err = signed_hbars([(l.replace("\n", " "), e,
                          (MC[l]["p5"] - p) / p * 100, (MC[l]["p95"] - p) / p * 100)
                         for l, m, p, e in CAL],
@@ -303,10 +299,9 @@ batchcompare = grouped_bars([_tlab(n) for n in MT],
                             ylab="min GPUs to finish in window",
                             annotfn=lambda cat, s: (lambda d, cn: ffloor(_bccfg(cat, cn), int(d[:-1]) * 86400))(*s.split()))
 
-# Sensitivity runs at an EXPLICIT GPU budget (not a window's min-cluster), so the operating point is
-# unambiguous. optimal_split() picks the best trainer:inference allocation for that budget; we then
-# hold that ACTUAL cluster (its trainer + inference GPU COUNTS) FIXED and perturb each physics lever
-# -> wall-clock change at fixed hardware. The solver is GPU-based, so total_time() takes GPU COUNTS.
+# Sensitivity runs at an EXPLICIT GPU budget, not a window's min-cluster, so the operating point is
+# unambiguous: optimal_split picks the allocation, then that actual cluster's GPU counts are held
+# FIXED while each physics lever is perturbed -> wall-clock change at fixed hardware.
 SENS_GPUS = 100_000
 cfgR = _with(base, target_c_rl=2.5e25)
 _solR = optimal_split(cfgR, SENS_GPUS)                    # (tt, nt_nodes, ni_nodes, r, train_frac)
@@ -357,55 +352,15 @@ pol_hm = heatmap([_hmlab(n) for n in MT], [f"{n}\n{v:.0e}" for n, v in bars],
                  colaxis="governance reporting threshold (total-run FLOP)")
 
 # --- 2b. inverse of 2a: given a FIXED GPU stock (swept, not the target), what's the MAXIMUM RL
-# compute achievable at the optimal split. Mirrors feasibility.py's max_compute_by_stock table
-# (same optimal_split/per_step_flop calls) so the CLI table and this chart always agree.
+# compute achievable at the optimal split. Shares feasibility_core.max_compute_operating_point with
+# the CLI's max_compute_by_stock table, so the two cannot disagree.
 STOCK_SWEEP = (64, 128, 1024, 10_000, 100_000, 1_000_000)
 STOCK_LABEL = {s: f"{_fn(s)} GPUs" for s in STOCK_SWEEP}
 LABEL_STOCK = {v: k for k, v in STOCK_LABEL.items()}
 
 
-def max_op_at_stock(cfg, stock):
-    """Same computation as feasibility.py's max_compute_operating_point(): the window-INDEPENDENT
-    operating point at a given GPU stock -- split, T_step (+ T_update/T_rollout+verify/T_broadcast
-    breakdown), the ACHIEVED overall MFU of the whole allocated cluster (both conventions),
-    bottleneck, per-step FLOP. None if the model doesn't fit a single node. Computed once per
-    stock and reused for every window (cheap arithmetic after).
-
-    MFU here is GENUINELY DERIVED, not an echoed input: r.mfu_model/r.mfu_hw (model.py) reduce
-    algebraically to (mfu_train input) x a fixed constant -- identical at every stock size since
-    they only look at the trainer's own t_update, never whether either pool idles waiting on the
-    other. This instead divides total actual FLOPs (train+rollout) by T_step x the COMBINED peak
-    FLOPs/s of every allocated GPU, so an idling pool correctly drags it down."""
-    # Cap the node to the fleet (shared helper, same rule as feasibility.max_compute_operating_point
-    # so the CLI table and this chart still agree): a node can't exceed the stock and disaggregation
-    # needs >=2 nodes, so at small stock the configured node shrinks -- otherwise a stock < 2 nodes
-    # silently over-allocated whole configured-size nodes (stock=16 with a 720-node -> 1,440 GPUs).
-    eff = effective_node_gpus(cfg.gpus_per_node, stock)
-    c = _with(cfg, stock_gpus=stock, gpus_per_node=eff)
-    sol = optimal_split(c, stock)
-    if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
-        return None
-    tt, nt, ni, r, frac = sol
-    # BUG (fixed): `tt` is total_time() for cfg's OWN target_c_rl at this split, NOT the per-step
-    # time -- using it here made every T_step off by n_steps(cfg) (see feasibility.py's identical
-    # fix for the full explanation). The real per-step time is r.t_step.
-    pf = per_step_flop(c)
-    s = r.scenario
-    train_peak = s.train_hw.n_nodes * s.train_hw.flops
-    inf_peak = s.inf_hw.n_nodes * s.inf_hw.flops
-    total_peak = train_peak + inf_peak
-    model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
-    return dict(n_total=nt + ni, gpus=gpus_of(r), nt=nt, ni=ni, frac=frac,
-                t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
-                t_broadcast=r.t_bc, bottleneck=r.bottleneck,
-                mfu_model=model_flops_step / (r.t_step * total_peak),
-                mfu_hw=pf / (r.t_step * total_peak),
-                per_step_flop=pf)
-
-
 def max_c_rl_at_stock(cfg, stock, window_s):
-    """Bar-chart value: max achievable C_RL at a stock/window. Thin wrapper over
-    max_op_at_stock() so the chart and the appendix table below always agree."""
+    """Bar-chart value: max achievable C_RL at a stock/window."""
     op = max_op_at_stock(cfg, stock)
     return None if op is None else op["per_step_flop"] * window_s / op["t_step"]
 
@@ -470,9 +425,9 @@ def _dccfg(scen, name, int4=False):
     return _with(base, target_c_rl=MT[name], **{**_batch_ov(name), **ov})
 
 
-# "find the best node size": sweep the centralised node at the reference target, report the true
-# optimum against the real NVL72 (72) we use. Bigger nodes cut inference waves but coarsen the
-# allocation granularity (>=2 nodes), so min GPUs is U-shaped in node size -- there is a genuine best.
+# Sweep the centralised node at the reference target, reporting the true optimum against the NVL72
+# (72) actually used. Bigger nodes cut inference waves but coarsen allocation granularity (>=2
+# nodes), so min GPUs is U-shaped in node size -- there is a genuine best.
 def _cen_node_sweep(crl=GROK3_C_RL, nodes=(16, 32, 48, 72, 96, 144, 256, 576)):
     out = []
     for nd in nodes:
@@ -554,8 +509,8 @@ _node_ev_memo = {}
 
 def _node_ev(cat, slab):
     """2s cell: one evaluate() per (compute budget, node size), memoised -- grouped_bars asks the
-    value/hollow/annotation callbacks separately and again on the drawing pass, and the infeasible
-    cells run a full-stock optimal_split far too slow to repeat four times."""
+    value/hollow/annotation callbacks separately, and an infeasible cell runs a full-stock
+    optimal_split that is far too slow to repeat."""
     if (cat, slab) not in _node_ev_memo:
         name = _LAB2NAME[cat]
         _node_ev_memo[cat, slab] = evaluate(
@@ -564,10 +519,9 @@ def _node_ev(cat, slab):
     return _node_ev_memo[cat, slab]
 
 
-# Missing the window is drawn HOLLOW, not as a value-less box: evaluate() already carries the full-
-# stock floor -- the fastest achievable wall-clock and the GPUs that reach it -- so the bar sits at
-# that GPU count with the wall-clock in the box. Both are the answer to "and if not in 180d, then
-# what?", which the full-height box discarded. Log axis: those floors run to ~1M GPUs against
+# Missing the window is drawn HOLLOW rather than as a value-less box: evaluate() already carries the
+# full-stock floor -- the fastest achievable wall-clock and the GPUs reaching it -- so the bar sits at
+# that GPU count with the wall-clock in the box. Log axis: those floors reach ~1M GPUs against
 # feasible bars of ~64, which a linear axis flattens to slivers.
 dc_node_gpus = grouped_bars([_tlab(n) for n in MT],
                             [(INF_NODE_SLAB[n], PAL[i]) for i, n in enumerate(INF_NODE_SWEEP)],
@@ -846,7 +800,13 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 </table></div>
 """
 DOC = page("Distributed-RL: full results dashboard", BODY)
-os.makedirs(os.path.dirname(OUT), exist_ok=True)
-open(OUT, "w", encoding="utf-8").write(DOC)
-print(f"wrote {OUT}  ({DOC.count('<svg')} charts, "
-      f"{len(mc_trows) + len(trows) + len(er_trows) + len(stock_trows)} table rows)")
+
+# Guarded so that IMPORTING this module (to reuse a chart helper, or to probe one config against the
+# same `base` the page uses) does not overwrite the committed dashboard.html. The charts above are
+# still built at import time -- they are module-level -- so an import costs ~25s; the guard only
+# stops the write.
+if __name__ == "__main__":
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    open(OUT, "w", encoding="utf-8").write(DOC)
+    print(f"wrote {OUT}  ({DOC.count('<svg')} charts, "
+          f"{len(mc_trows) + len(trows) + len(er_trows) + len(stock_trows)} table rows)")

@@ -1,58 +1,31 @@
 #!/usr/bin/env python3
 """
 feasibility_core.py -- Config, solver and formatting primitives for the distributed-RL
-feasibility study. NO printing lives here; the sweeps/tables/CSVs are in feasibility.py.
+feasibility study. NO printing lives here; the sweeps/tables/CSVs are in feasibility.py, and
+results/plot_dashboard.py imports this module for the same numbers.
 
-Split this way so you can tweak parameters and reason about the solver without scrolling past
-fifteen table renderers, and so other tools (results/plot_dashboard.py) can import the core
-without pulling in presentation code.
-
-Question the study answers: for an RL run of a given COMPUTE SCALE (anchored to known models or
-to FLOP thresholds), what is the MINIMUM cluster (node count + optimal trainer:inference split)
-that completes it inside a target wall-clock window, on a given GPU family and internet speed,
-subject to a finite compute stock and a per-site power (detectability) cap -- and what does it
-cost.
-
-Everything is a knob (see FeasConfig): target C_RL, GPU/server family, WAN speed, weight-sync
-compression, RL hyperparams (batch, E[R], omega), economics, stock, per-site power.
+The question: for an RL run of a given COMPUTE SCALE (anchored to known models or to FLOP
+thresholds), what is the minimum cluster -- node count + trainer:inference split -- that finishes
+it inside a target wall-clock window, on a given GPU family and internet speed, subject to a
+finite compute stock and a per-site power (detectability) cap, and what does it cost. Every input
+is a knob: see FeasConfig.
 
 RESULT MODEL: every table goes through evaluate(cfg, window), which ALWAYS returns one operating
-point -- so a scenario that misses the window is never just "infeasible". When feasible: the min
-cluster that hits the window. When infeasible: the full stock at optimal split, i.e. the FASTEST
-ACHIEVABLE wall-clock ("days to expend the FLOPs") and the optimal trainer:rollout ratio at that
-floor. `no-fit` = model weights exceed a single node (no multi-node inference TP modelled ->
-genuinely unrepresentable, not just slow).
+point, so a scenario that misses the window is never just "infeasible":
+    feasible   -> the minimum cluster that hits the window
+    infeasible -> the full stock at optimal split = the fastest achievable wall-clock ("days to
+                  expend the FLOPs") and the trainer:rollout ratio at that floor
+    no-fit     -> the weights exceed one serving group, or the replica exceeds one trainer node;
+                  either needs parallelism this model does not represent, so it is unrepresentable
+                  rather than slow.
 
-KNOWN FIRST-CUT BIASES (documented; do not read absolutes as final):
-  * MoE decode-memory: handled in model.py (mem_weights_decode) -- decode bandwidth reads the
-    active path (p_active_layers + head); HBM CAPACITY still holds all experts (p_total);
-    KV-cache traffic stays dense (all layers). inf_bw_mult is a pure HBM-bandwidth knob.
-  * penalty_para=1.0 (A-ii): INTER-node throughput loss under sharding, held at 1 -- the update runs
-    on co-located replica nodes (fast intra-node interconnect) and at these bandwidths the inter-node
-    loss is negligible; it would NOT hold for a WAN-sharded learner (unmodelled term). Broadcast to
-    the remote INFERENCE sites IS charged (net.*).
-  * Trainer node model: each update node holds a FULL model REPLICA (intra-node shard only, no cross-
-    node model parallelism); multiple trainer nodes are DATA-PARALLEL replicas. Nodes are up to
-    train_gpus_per_node (128) GPUs; a SINGLE trainer node is right-sized DOWN (min_gpus_for_tsb) to
-    the min GPUs that (a) fit the replica + resident activation in ONE node and (b) keep update
-    inside the step's time budget. The solver ENFORCES the full mem.fits (replica + activation <= one node's HBM),
-    so a node too small for the replica is no-fit (would need the disallowed cross-node parallelism).
-    act_site_parallel=True: activation is sequence/tensor-parallel sharded WITHIN the node (does not
-    scale with node size); the data-parallel per-GPU path (act_site_parallel=False) is kept for the
-    calibrated validation presets. Not yet modelled (would only tighten): largest gathered FSDP unit,
-    collective/workspace buffers, master-copy dtype.
-  * Off-policy staleness (A-iii): `sync_interval` (k) now models the DiLoCo/async_level relaxation
-    -- k=0 on-policy (serial), k=1 one-step off-policy (overlapped, default), k>=2 broadcasts every
-    k steps (per-step broadcast /k). Its BENEFIT only: the sample-efficiency cost of staleness is
-    not modelled, so large k reads as a free win. `compression` is now purely a quantization factor.
-  * Inference serving group: weights must fit ONE group of inf_tp tensor-parallel nodes (inf_tp_max=1
-    -> a single node, the decentralised case). The group pools HBM/bandwidth/FLOPs for one weight copy,
-    so tp divides the decode weight-streaming floor and lets bigger models fit; the solver picks the
-    smallest tp that wins, since a group is tp WHOLE nodes. The TP collectives themselves (AllReduce
-    per layer, AllToAll once KV shards past n_kv_heads) are NOT charged -- inf_tp_max stands in for
-    what the fabric can sustain.
-Time windows are ours; anchor them against Epoch's distributed-training feasibility model when
-writing.
+Modelling assumptions and their known biases are catalogued ONCE in SIMULATOR_MAP.md ("Deliberate
+deviations" and "Known gaps" A-i..A-x) -- read that before quoting an absolute number. The two
+that shape this file's solver: each trainer node holds a FULL model replica (intra-node sharding
+only; multiple nodes are data-parallel replicas), and inference weights must fit ONE serving group
+of inf_tp nodes. Both are enforced, not assumed -- total_time() rejects a config that violates
+either. Time windows are ours; anchor them against Epoch's distributed-training feasibility model
+when writing.
 """
 import math
 from dataclasses import dataclass, field, replace
@@ -104,13 +77,11 @@ def node_hw(gpu, g=8):
 # ---------------------------------------------------------------------------
 # Export-control node caps (US BIS "Total Processing Performance").
 # ---------------------------------------------------------------------------
-# TPP = 2 x (non-sparse MacTOPS) x (bit length of the multiply input). We store dense BF16 FLOP/s
-# ('flops'), and 1 MAC = 2 FLOP, so MacTOPS = flops/2 and TPP = 2 x (flops/2) x bits = flops x bits.
-# At the reference BF16 precision (16-bit) this makes per-chip TPP just flops x 16 -- so an H100 is
-# 989 TFLOP/s x 16 = 15,824 TFLOP-bit/s, and the "16 H100" cap is 253,184 TFLOP-bit/s. NOTE: at a
-# uniform BF16 rating the TPP cap is numerically a pure FLOP-equivalent cap; TPP only diverges from
-# FLOP-equivalents once chips are rated at different precisions (e.g. an FP4-heavy part), which this
-# BF16-roofline model does not track -- so read these caps as "N H100-equivalents of dense compute".
+# TPP = 2 x (non-sparse MacTOPS) x (multiply-input bit length). With 1 MAC = 2 FLOP that collapses
+# to flops x bits, so per-chip TPP at BF16 is just flops x 16: an H100 is 15,824 TFLOP-bit/s and the
+# "16 H100" cap is 253,184. At a uniform BF16 rating this is numerically a pure FLOP-equivalent cap
+# -- TPP only diverges once chips are rated at different precisions (an FP4-heavy part), which this
+# BF16 roofline does not track. Read the caps as "N H100-equivalents of dense compute".
 TPP_BITS = 16                          # reference precision for the TPP rating (BF16)
 
 
@@ -136,18 +107,10 @@ def node_gpus_power_cap(gpu, node_kw, pue=FACILITY_PUE):
 
 
 def effective_node_gpus(gpus_per_node, stock_gpus):
-    """Node size actually usable at a given fleet size: min(configured, stock//2), floored at 1.
-
-    Two hard limits a by-stock sweep must respect, both otherwise silently violated when the
-    configured node is large (e.g. an NVL72/720 node against a 16-GPU fleet):
-      - a node cannot be bigger than the whole fleet;
-      - disaggregated RL needs >=2 nodes (>=1 trainer + >=1 inference), which optimal_split floors
-        each side to -- so a node is at most HALF the stock, else optimal_split over-allocates whole
-        configured-size nodes and reports a fleet far larger than `stock` (the old bug: stock=16 with
-        a 720-node silently simulated 2x720=1,440 GPUs, so 16/128/1024 all returned the same value).
-    When the configured node already fits (stock >= 2*node) this is a no-op, so it only reshapes the
-    small-fleet end of a sweep -- there it correctly reports the small-node physics (or no-fit, when
-    even stock//2 GPUs can't hold the model for single-node inference) instead of a fiction."""
+    """Node size usable at a given fleet size. Disaggregation needs >=2 nodes, so a node is at most
+    half the stock -- otherwise a by-stock sweep allocates whole configured-size nodes and reports a
+    fleet larger than `stock`. No-op once stock >= 2 x node, so it only reshapes a sweep's small-
+    fleet end (where the honest answer is the small-node physics, or no-fit)."""
     return max(1, min(gpus_per_node, stock_gpus // 2))
 
 
@@ -169,10 +132,10 @@ MODEL_TARGETS = {          # (C_RL, provenance-note)
 THRESHOLD_TARGETS = {"1e24": 1e24, "1e25": 1e25, "1e26": 1e26}
 
 # Named governance thresholds = total-training-run FLOP reporting/registration bars. Point for the
-# writeup: RL stages (1.3e23..6e23) sit 2-3 OOM BELOW these, so an RL run reproducing a frontier
+# writeup: the disclosed RL stages (MODEL_TARGETS, 2e22 up) sit below these, so an RL run reproducing a frontier
 # reasoning model is invisible to FLOP-threshold governance -- the threshold binds on pre-training.
 POLICY_THRESHOLDS = {
-    "MIRI-monitored":   1e22, 
+    "MIRI-monitored":   1e22,
     "EU GPAI":          1e23,   # EU AI Act GPAI baseline
     "MIRI-strict":      1e24,
     "EU systemic":      1e25,   # EU AI Act systemic-risk tier
@@ -202,14 +165,11 @@ def model_targets(top=None):
 
 
 # --- Experiment: per-target batch that scales with compute budget --------------------------------
-# A single FIXED batch across all targets leaves the smallest budgets finishing in a handful of steps
-# (at 65,536 batch, DeepSeek-R1-Zero's 2e22 spends its whole budget in ~3 steps), where serial step
-# latency -- the whole point of the study -- is irrelevant. Scaling the batch with the budget instead
-# gives every target a comparable, SIZEABLE step count (~750-37,000), so the latency wall actually
-# binds across the ladder. Smallest target = TARGET_BATCH_BASE, x4 per step up the sorted budget
-# ladder (256 -> 1,024 -> 4,096 -> 16,384 -> 65,536 for the five model targets). This is also
-# physically defensible: critical batch size grows with training scale. Callers opt in explicitly
-# (the dashboard's USE_TARGET_BATCH flag); model_targets()/the solver are unchanged.
+# One FIXED batch across all targets leaves the smallest budgets finishing in ~3 steps, where serial
+# step latency -- the whole point of the study -- cannot bind. Scaling the batch with the budget
+# (TARGET_BATCH_BASE, x4 per rung: 256 -> 65,536 across the five targets) gives every target a
+# sizeable step count, and is defensible anyway since critical batch size grows with scale.
+# Callers opt in explicitly; model_targets() and the solver are unchanged.
 TARGET_BATCH_BASE = 256
 
 def target_batch(name):
@@ -221,14 +181,11 @@ def target_batch(name):
 
 
 # --- IsoCompute law (arXiv 2603.12151), an alternative to the x4 heuristic above ------------------
-# That paper decomposes RL sampling compute as C = Bp * n * M (problems-per-batch x rollouts-per-
-# problem x update-steps) and finds: (i) Bp is mainly a STABILITY knob, marginal within a moderate
-# range -> hold it FIXED at a small-stable value; (ii) the compute-sensitive lever is n, which rises
-# with budget along a sigmoid in log-log and SATURATES (~512 easy set, ~128-256 hard); (iii) the mix
-# shifts from problem-heavy (low budget) to rollout-heavy (high budget). So instead of a square
-# Bp x n that grows unboundedly, this fixes Bp and scales n up a saturating rung ladder, capped at
-# the easy-set ceiling. ISO_N_BY_RUNG is a STYLIZED read of the paper's Figure-7 shape (powers of
-# two, saturating at 512), NOT their raw fitted curve -- the exact n*(C) values weren't extractable.
+# That paper decomposes sampling compute as C = Bp * n * M and finds Bp mainly a stability knob
+# (hold it fixed) while n is the compute-sensitive lever, rising along a log-log sigmoid that
+# saturates (~512 easy set, ~128-256 hard). So: fix Bp, walk n up a saturating ladder.
+# ISO_N_BY_RUNG is a STYLIZED read of their Figure 7 (powers of two, saturating at 512), not their
+# fitted curve -- the exact n*(C) values were not extractable.
 ISO_BP = 128                                 # fixed problems/batch: mid of the paper's {32..1024} sweep, "stable"
 ISO_N_BY_RUNG = (8, 32, 128, 256, 512)       # rollouts/problem up the budget ladder; saturating, cap 512 (easy set)
 
@@ -261,7 +218,9 @@ MODELS = {
     "Llama4-402B-A17B": ModelSpec(name="Llama4-402B-A17B", is_moe=True, p_total=400e9, p_active=17e9,
                                      d_model=5120, n_layers=48, n_q_heads=40, n_kv_heads=8, head_dim=128, vocab=202048),
 }
-# DEFAULT feasibility model = Qwen3-235B-A22B (an open, frontier-relevant MoE we have measured E[R] for).
+# DEFAULT feasibility model: dense Llama-3.1-405B -- open weights, frontier-scale, and the arch
+# every published figure in the writeup is quoted at. Switch to Qwen3-235B-A22B for the MoE path
+# (an open MoE with a measured E[R]).
 DEFAULT_MODEL = "Llama3-405B"
 
 
@@ -290,7 +249,7 @@ class FeasConfig:
     gpu: str = "H100"
     gpus_per_node: int = 16             # Inference node
     train_gpus_per_node: int = 128      # Update node (holds a full model replica). Single nodes are resized DOWN to the min GPUs that fit the replica
-    wan_mbps: float = 1000.0
+    wan_mbps: float = 1_000.0
     compression: float = 16.0           # weight-sync compression.
     sync_interval: float = 1            # Off-policy staleness degree k
     inf_tp_max: int = 1                 # Largest tensor-parallel serving group the fabric allows (nodes/group).
@@ -406,14 +365,11 @@ def total_time(cfg, n_train_gpus, n_inf_gpus, tp=1):
     return n_steps(cfg) * r.t_step, r
 
 
-# ONE sizing routine underpins BOTH solvers, so they can never disagree: given a per-step time budget
-# tsb, size each stage to the SMALLEST hardware that fits it. Rollout and update overlap (t_step = max
-# of stages), so the two are sized INDEPENDENTLY against tsb -- crucially this admits UPDATE-BOUND
-# splits (update only has to beat tsb, not beat rollout). A search that instead walked the "trainer
-# matched to rollout" curve cannot reach those, and at a wave-count jump in rollout(n_inf) -- where
-# matching the suddenly-faster rollout demands a much bigger trainer -- it gets priced out of budget
-# and retreats to a far slower point. Sizing against tsb sidesteps that entirely.
-#   min_cluster(window)  = min_gpus_for_tsb(window / n_steps)          -- min GPUs to hit a window
+# ONE sizing routine underpins BOTH solvers, so they can never disagree: given a per-step time
+# budget tsb, size each stage to the smallest hardware that fits it. Rollout and update overlap
+# (t_step = max of stages), so the two are sized INDEPENDENTLY against tsb -- which is what admits
+# update-bound splits, where the update only has to beat tsb rather than beat rollout.
+#   min_cluster(window)   = min_gpus_for_tsb(window / n_steps)         -- min GPUs to hit a window
 #   optimal_split(budget) = smallest tsb whose min_gpus_for_tsb fits   -- min wall within a budget
 # TSB_TOL is the relative convergence tolerance for that outer time bisection.
 TSB_TOL = 1e-4
@@ -450,7 +406,14 @@ def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp):
         return dict(roll=r.stages["rollout+verify"],
                     mem_floor=r16(r.mem.total / pgh), c_update=r.tc.c_update)
 
+    # build() sizes a single node from the GPU count, so the smallest probe can be a node too small
+    # to hold the weights even when a full one would. Walk the floor up instead of calling the whole
+    # config unrepresentable -- model_fits only improves with node size, and is flat once the node is
+    # full (tp > 1 always builds full nodes, so there is nothing to walk).
     p0 = probe(inf_min)
+    while p0 is None and inf_min < cfg.gpus_per_node:
+        inf_min = min(inf_min + step, cfg.gpus_per_node)
+        p0 = probe(inf_min)
     if p0 is None:
         return None
     max_inf = ((stock - p0["mem_floor"]) // step) * step   # leave room for at least a memory-floor trainer
@@ -465,7 +428,8 @@ def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp):
         lo, hi = inf_min, max_inf                          # lo fails, hi fits
         while hi - lo > step:
             mid = max(lo + step, (((lo + hi) // 2) // step) * step)
-            if probe(mid)["roll"] <= roll_b:
+            pm = probe(mid)
+            if pm is not None and pm["roll"] <= roll_b:
                 hi = mid
             else:
                 lo = mid
@@ -498,9 +462,8 @@ def min_gpus_for_tsb(cfg, tsb, budget=None):
     Inference: min GPUs with rollout+verify <= its budget (bisection; rollout falls with inference).
     Trainer:   min GPUs with update <= its budget, floored at the replica's one-node memory fit.
     Tries every allowed serving-group size (and, when serial, every budget split) and keeps the
-    CHEAPEST, so tp only rises when a bigger group actually buys hardware -- a tp-node group is a real
-    granularity floor, so small runs stay at tp=1. Returns dict(n_train, n_inf, tp, gpus, tt, r) or
-    None if tsb is unreachable inside `budget` (defaults to cfg.stock_gpus)."""
+    cheapest, so tp only rises when a bigger group actually buys hardware. -> dict(n_train, n_inf,
+    tp, gpus, tt, r), or None if tsb is unreachable inside `budget` (default cfg.stock_gpus)."""
     if not (tsb > 0 and math.isfinite(tsb)):
         return None
     stock = cfg.stock_gpus if budget is None else budget
@@ -523,22 +486,31 @@ def min_gpus_for_tsb(cfg, tsb, budget=None):
     return best
 
 
-def optimal_split(cfg, total_gpus, fracs=None):
+def optimal_split(cfg, total_gpus):
     """Min-wall allocation fitting total_gpus: binary-search the smallest per-step budget tsb whose
-    min_gpus_for_tsb() still fits. Searches the full (trainer, inference) space via tsb -- update-bound
-    splits included -- so it no longer retreats to a slower point when a wave-count jump prices a
-    rollout-matched trainer out of budget. Returns (time, n_train_nodes, n_inf_nodes, r, train_frac).
-    `fracs` is accepted but unused: the split is derived exactly, not swept over a preset grid."""
+    min_gpus_for_tsb() still fits. Searching via tsb covers the whole (trainer, inference) space,
+    update-bound splits included. -> (time, n_train_nodes, n_inf_nodes, r, train_frac)."""
     steps = n_steps(cfg)
     if not (math.isfinite(steps) and steps > 0):
         return (float("inf"), 1, 1, None, 0.0)
-    # Upper bound: the cheapest viable cluster (smallest inference + its memory-floor trainer). Its
-    # per-step time is reachable by definition, so it seeds the bisection's "fits" end.
-    seed = simulate(cfg.build(cfg.train_gpus_per_node, GPU_STEP))
+    # Upper bound: one full serving group at the largest allowed tp -- the most permissive shape the
+    # solver may build, so it settles "is this representable at all", and its per-step time is
+    # reachable by definition. (A GPU_STEP-node seed instead reported no-fit whenever the weights
+    # needed a full node.)
+    tp0 = max(1, cfg.inf_tp_max)
+    seed = simulate(cfg.build(cfg.train_gpus_per_node, cfg.gpus_per_node * tp0, tp0))
     if not seed.ro.model_fits:
         return (float("inf"), 1, 1, None, 0.0)
     hi = seed.t_step
-    best = min_gpus_for_tsb(cfg, hi, budget=total_gpus)
+    # The seed is an allocation, not a budget the sizing routine can necessarily reproduce: under a
+    # serial (k=0) composition the budget is partitioned over SERIAL_SPLITS, which cannot land on an
+    # exact stage boundary. Relax hi until it IS reproducible rather than declaring the config
+    # unaffordable -- the bisection below then refines back down. No-op when k >= 1.
+    best, relax = None, 0
+    while best is None and relax < 8:
+        best = min_gpus_for_tsb(cfg, hi, budget=total_gpus)
+        if best is None:
+            hi *= 2; relax += 1
     if best is None:
         return (float("inf"), 1, 1, None, 0.0)             # can't even afford the cheapest cluster
     lo = 0.0
@@ -602,13 +574,6 @@ def evaluate(cfg, window_s):
     )
 
 
-def cost_of(cfg, sol):
-    """Legacy helper (min_cluster-style dict). Prefer evaluate() for new code."""
-    gpus = sol["gpus"]
-    gpu_hrs = gpus * sol["tt"] / 3600
-    return gpus, gpu_hrs, gpu_hrs * cfg.gpu_hr_usd
-
-
 # Link speed at which the weight broadcast is definitely NOT a step bottleneck (~1 Pbit/s -- for any
 # model here t_bc collapses to the fixed latency floor). required_bcast_mbps solves the operating
 # point AT this speed so the metric is decoupled from the config's own link and compression.
@@ -616,23 +581,21 @@ BCAST_FREE_MBPS = 1e9
 
 
 def required_bcast_mbps(cfg, window_s):
-    """Minimum weight-sync link*compression (Mbps, at 1x compression) for the broadcast to stay
-    hidden -- i.e. NOT become the step-time bottleneck -- at this target/window. -> (mbps_or_None, ev).
+    """Minimum weight-sync link x compression (Mbps at 1x) for the broadcast to stay hidden -- not
+    become the step-time bottleneck -- at this target/window. -> (mbps_or_None, ev).
 
-    Solved with the broadcast effectively FREE (BCAST_FREE_MBPS): evaluate() picks the min-hardware
-    allocation and its compute-stage times WITHOUT the current link or compression influencing them
-    (otherwise the metric is circular -- a slow link slackens the trainer, which would report a LOWER
-    requirement -- and drifts with the compression knob via the same operating-point coupling). The requirement is then set purely by the compute stages the broadcast overlaps.
+    Solved with the broadcast effectively FREE (BCAST_FREE_MBPS), so evaluate() picks the allocation
+    and its stage times without the current link or compression influencing them. Otherwise the
+    metric is circular: a slow link slackens the trainer and would report a LOWER requirement, and
+    the same coupling made it drift with the compression knob.
 
-    Broadcast overlaps the WHOLE step (>=1-step off-policy: concurrent with the next step's generation
-    AND update), so per model.py's t_step = max(gen, update, bcast) it is hidden iff it fits under the
-    SLOWER compute stage: t_compute = max(rollout+verify, update). k>=2 off-policy gives it k steps.
+    The broadcast overlaps the whole step (>=1-step off-policy: concurrent with the next step's
+    generation AND update), so under t_step = max(gen, update, bcast) it is hidden iff it fits under
+    the SLOWER compute stage, max(rollout+verify, update). k>=2 gives it k steps.
 
-    Returned at 1x (link*compression), compression-INDEPENDENT: the uncompressed weight volume over
-    the time budget, so a real compression factor simply DIVIDES it (int4-at-4x needs a quarter).
-
-    None when the model doesn't fit a node, or when even a free link's fixed latency floor already
-    exceeds the compute budget -- there no finite bandwidth suffices ('unbounded'), a real answer."""
+    Returned at 1x and compression-independent -- uncompressed volume over the time budget -- so a
+    real compression factor simply divides it. None when the model doesn't fit, or when even a free
+    link's latency floor exceeds the budget: no finite bandwidth suffices, which is a real answer."""
     ev = evaluate(with_cfg(cfg, wan_mbps=BCAST_FREE_MBPS), window_s)
     if not ev["runnable"]:
         return None, ev
@@ -647,10 +610,9 @@ def required_bcast_mbps(cfg, window_s):
     return raw_weight_bytes * 8 / 1e6 / budget, ev
 
 
-# arXiv 2603.12151's largest EMPIRICALLY TESTED rollout batch. No longer a hard bound on the
-# sweep below (which deliberately runs one point past it) -- it marks where the runtime model
-# stops having calibration to stand on, so presentation layers should flag points above it as
-# extrapolation rather than silently omitting or silently showing them.
+# arXiv 2603.12151's largest empirically tested rollout batch. Not a bound on the sweep below
+# (which runs one point past it) -- it marks where calibration runs out, so presentation layers
+# flag points above it as extrapolation rather than showing them unmarked.
 BATCH_CAP = 65_536
 
 # Total rollout batch (B questions x n samples/question), x4 per step so six points span three
@@ -662,12 +624,10 @@ def batch_split(total):
     """Split a power-of-two total rollout batch into (B questions, n samples per question) as
     evenly as powers of two allow: B = 2**ceil(e/2), n = 2**floor(e/2) for total = 2**e.
 
-    Even-ish is the right default because at fixed total batch the two axes are near-substitutes
-    for wall-clock in this model -- both just cut the serial step count, and n is only marginally
-    cheaper per rollout via shared prefill. That substitutability is exactly why a full B x n grid
-    is mostly redundant along its diagonals, and why the honest presentation sweeps the PRODUCT.
-    (Where the axes stop being substitutes is learning dynamics, which this runtime model does not
-    represent -- that needs the sigmoid fits from arXiv 2603.12151.)"""
+    Even-ish because at fixed total batch the two axes are near-substitutes for wall-clock here:
+    both cut the serial step count, and n is only marginally cheaper via shared prefill. That is
+    why a full B x n grid is redundant along its diagonals and the presentation sweeps the PRODUCT.
+    They stop being substitutes in learning dynamics, which this runtime model does not cover."""
     e = round(math.log2(total))
     return 2 ** ((e + 1) // 2), 2 ** (e // 2)
 
@@ -688,16 +648,61 @@ def split_for(cfg, total_gpus):
     return nt, ni
 
 
+def max_achievable_split(cfg):
+    """(T_step, nt, ni, r, frac) at the full stock, minimising step time. total_time is ~monotone
+    non-increasing in node count, so the max-throughput point is always "whole stock, split
+    optimally", never a subset."""
+    return optimal_split(cfg, cfg.stock_gpus)
+
+
+def max_compute_operating_point(cfg, stock=None):
+    """The window-INDEPENDENT max-throughput operating point: split, T_step (+ the per-stage
+    breakdown), achieved whole-cluster MFU, bottleneck, per-step FLOP. `stock` overrides
+    cfg.stock_gpus. None if the model doesn't fit. Computed once per (cfg, stock) so a caller
+    sweeping windows never re-runs optimal_split.
+
+    The MFU here is derived, not echoed: r.mfu_model/r.mfu_hw only see the trainer's own t_update,
+    so they are identical at every stock size. This divides actual FLOPs (train + rollout) by
+    T_step x the combined peak of every allocated GPU, so a pool idling on the other stage's
+    bottleneck drags it down -- it moves with the split (and craters when broadcast dominates)."""
+    c = cfg if stock is None else with_cfg(cfg, stock_gpus=stock)
+    eff = effective_node_gpus(c.gpus_per_node, c.stock_gpus)
+    if eff != c.gpus_per_node:
+        c = with_cfg(c, gpus_per_node=eff)
+    sol = max_achievable_split(c)
+    if sol is None or not math.isfinite(sol[0]) or sol[3] is None:
+        return None
+    tt, nt, ni, r, frac = sol
+    # Per-step time is r.t_step; optimal_split's `tt` is the whole-run wall-clock (n_steps x t_step).
+    pf = per_step_flop(c)   # node-count-independent == r.tc.c_update + r.ro.c_rollout_total
+    s = r.scenario
+    total_peak = s.train_hw.n_nodes * s.train_hw.flops + s.inf_hw.n_nodes * s.inf_hw.flops
+    # model-FLOPs convention: strip the recompute coefficient off the training term only (inference
+    # is forward-only) -- mirrors model.py's own model_flops.
+    model_flops_step = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * r.tc.c_update + r.ro.c_rollout_total
+    return dict(gpus=gpus_of(r), n_total=nt + ni, nt=nt, ni=ni, frac=frac,
+                t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"],
+                t_broadcast=r.t_bc, bottleneck=r.bottleneck,
+                mfu_model=model_flops_step / (r.t_step * total_peak),
+                mfu_hw=pf / (r.t_step * total_peak),
+                per_step_flop=pf)
+
+
+def steps_and_c_rl(op, window_s):
+    """Window-dependent numbers from an operating point: (steps, max achievable C_RL). Pure
+    arithmetic, so sweeping many windows over one op is free."""
+    steps = window_s / op["t_step"]
+    return steps, op["per_step_flop"] * steps
+
+
 # ---------------------------------------------------------------------------
 # Formatting (shared by feasibility.py tables and results/plot_dashboard.py)
 # ---------------------------------------------------------------------------
 def fmt_time(s):
-    """Single shared time formatter -- every table/CSV-adjacent display and the dashboard (as
-    `_ft`) route through this, so one fix here corrects every printed figure at once.
-    Values under 120s used to round to whole minutes (`f"{s/60:.0f} min"`), which silently
-    destroyed precision exactly where the max-compute tables' T_update/T_broadcast often land at
-    large GPU stocks: 23.3s printed as "0 min" (implying ~0), 38.1s printed as "1 min" (implying
-    60s, +57% off). Below 120s now prints seconds directly instead."""
+    """Single shared time formatter -- every table, CSV and the dashboard (as `_ft`) route through
+    this, so one fix corrects every printed figure. Sub-120s prints SECONDS, not whole minutes:
+    the max-compute tables' T_update/T_broadcast land there at large stock, where "0 min" for
+    23.3s reads as zero."""
     if not math.isfinite(s):  return "inf"
     if s < 120:    return f"{s:.1f} s"
     if s < 3600:   return f"{s/60:.0f} min"
@@ -715,10 +720,8 @@ def fmt_num(x):
 
 
 def fmt_rate(x):
-    """Like fmt_num, but keeps significant digits BELOW 1. fmt_num floors to "%.0f" under 1e3, so
-    every value under 0.5 printed as a flat "0" -- fine for the counts it was written for (GPUs,
-    steps, dollars, all >= 1) but wrong for required-bandwidth figures, where a small model's
-    weight sync genuinely needs a fraction of an Mbps and "0" reads as "none/free"."""
+    """Like fmt_num, but keeps significant digits below 1 -- required-bandwidth figures genuinely
+    land at a fraction of an Mbps, where fmt_num's "0" would read as free."""
     if not math.isfinite(x):  return "inf"
     for d, u in ((1e6, "M"), (1e3, "k")):
         if abs(x) >= d:

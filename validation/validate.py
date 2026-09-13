@@ -38,8 +38,8 @@ Repo layout
 * validation/presets.py   -- hardware/model constants and the published scenarios
 * validation/solvers.py   -- inverse calibration against published numbers
 * validation/reporting.py -- fmt()/report()/sweep_response_len()
-* feasibility.py          -- feasibility core (FeasConfig, evaluate, min_cluster)
-* feasibility_tables.py   -- feasibility sweeps/tables/CSV writers
+* feasibility_core.py     -- feasibility core (FeasConfig, evaluate, min_cluster, optimal_split)
+* feasibility.py          -- feasibility sweeps/tables/CSV writers + CLI
 """
 
 import argparse

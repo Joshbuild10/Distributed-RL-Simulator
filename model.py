@@ -1,9 +1,8 @@
 """
 model.py -- Analytic core: rollout -> verify -> update -> broadcast.
 
-Equations follow the user's term-splitting (equivalent to, but arranged
-differently from, the standard forms). See drl_model.py module docstring
-for the conventions these functions assume.
+Equations use this project's term-splitting: equivalent to the standard forms, arranged
+differently. Unit conventions (seconds, bytes, FLOP, per-node hardware) are in SIMULATOR_MAP.md.
 """
 
 import math
@@ -39,8 +38,6 @@ class TrainingMemory:
     grad_accum: float
     fits: bool
     headroom: float
-    persist_per_gpu: float      # sharded weights+grads+optimiser resident on ONE GPU
-    state_fits: bool            # persist_per_gpu <= per-GPU HBM (the solver-ENFORCED floor)
 
 
 @dataclass
@@ -54,10 +51,6 @@ class RolloutTerms:
     seqs_per_wave: float
     model_fits: bool
     seq_fits: bool
-    c_prefill: float
-    c_decode: float
-    c_dec_attn: float
-    vol_kv: float
     t_dec_comp: float
     t_dec_mem: float
     t_decode: float
@@ -73,7 +66,6 @@ class RolloutTerms:
 
 @dataclass
 class SimResult:
-    n_train_gpus: int
     tok_s_train: float
     tok_s_inf: float
     mfu_model: float
@@ -198,15 +190,9 @@ def training_memory(s: Scenario) -> TrainingMemory:
 
     grad_accum = s.rl.size_batch / max(hw.n_nodes * resident_per_node, 1) / max(a.opt_steps, 1)
 
-    # Persistent state per GPU, and whether it fits per-GPU HBM (diagnostic; solver gates on mem.fits).
-    per_gpu_hbm = hw.node_hbm / hw.gpus_per_node
-    persist_per_gpu = (weights + grads + opt_states) / hw.gpus_per_node
-    state_fits = persist_per_gpu <= per_gpu_hbm
-
     return TrainingMemory(weights=weights, grads=grads, optimiser=opt_states, activations=act,
                            act_per_gpu=act_per_gpu, total=mem_total, grad_accum=grad_accum,
-                           fits=mem_total <= hw.node_hbm, headroom=hw.node_hbm - mem_total,
-                           persist_per_gpu=persist_per_gpu, state_fits=state_fits)
+                           fits=mem_total <= hw.node_hbm, headroom=hw.node_hbm - mem_total)
 
 
 def rollout_terms(s: Scenario) -> RolloutTerms:
@@ -219,7 +205,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
 
     # Each decode token reads only the active weights.
     # Note that multiple experts can be activated over generation and may increase memory requirements
-    # Clamped at total params to avoid double counting the head whenp_active_layers == p_total
+    # Clamped at total params to avoid double counting the head when p_active + p_head > p_total
     mem_weights_decode = min(a.b_weights_inf * (m.p_active + m.p_head),
                              a.b_weights_inf * m.p_total)
 
@@ -309,8 +295,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
         kv_tok=kv_per_tok, mem_weights_inf=mem_weights_inf, mem_weights_decode=mem_weights_decode,
         kv_peak=kv_peak, kv_expected=kv_expected,
         seq_par=seq_par, seqs_per_wave=seqs_per_wave, model_fits=model_fits, seq_fits=seq_fits,
-        c_prefill=c_prefill, c_decode=c_decode,
-        c_dec_attn=c_dec_attn, vol_kv=vol_kv, t_dec_comp=t_dec_comp,
+        t_dec_comp=t_dec_comp,
         t_dec_mem=t_dec_mem, t_decode=t_decode, t_inf_attn=t_inf_attn,
         t_prefill=t_prefill, t_env=t_env, oversample_ratio=oversample_ratio, n_waves=n_waves,
         t_rollout=t_rollout, c_rollout_total=c_rollout_total,
@@ -393,7 +378,6 @@ def simulate(s: Scenario) -> SimResult:
 
     # Throughput + implied MFU, for comparison against published tok/s and MFU.
     # MFU convention: MODEL FLOPs (6N, excluding rematerialisation) over hardware peak.
-    n_train_gpus = s.train_hw.n_nodes * s.train_hw.gpus_per_node
     model_flops = (3.0 / (3 + s.algo.recomp_act + s.algo.recomp_old)) * tc.c_update
     peak_train = s.train_hw.n_nodes * s.train_hw.flops
     # STAGE-LOCAL (not whole-step): tokens in the training batch over the trainer's own active
@@ -413,7 +397,7 @@ def simulate(s: Scenario) -> SimResult:
     mfu_hw = tc.c_update / max(t_update * peak_train, 1e-9)
 
     return SimResult(
-        n_train_gpus=n_train_gpus, tok_s_train=tok_s_train, tok_s_inf=tok_s_inf,
+        tok_s_train=tok_s_train, tok_s_inf=tok_s_inf,
         mfu_model=mfu_model, mfu_hw=mfu_hw,
         scenario=s, tc=tc, mem=mem, ro=ro, t_update=t_update, t_verify=t_verify,
         vol_bc=vol_bc, t_bc=t_bc, stages=stages, t_step=t_step, mode=mode,
