@@ -150,8 +150,8 @@ def centralised_vs_decentralised(base, target_c_rl, window_d=90):
         cost_str = ("$" + fmt_num(ev["cost"])) if ev["feasible"] else "--"
         print(f"  {label:<30}{('yes' if ev['feasible'] else 'NO'):>6}{gs:>11}{fmt_time(ev['wall_s']):>9}"
               f"{fmt_ratio(ev['frac']):>8}{cost_str:>10}{ev['bottleneck']:>16}")
-    print("  (* = infeasible in window; wall = full-stock floor. int4-only-4x hitting the WAN wall is")
-    print("   an A-iii artifact -- broadcast-every-step; a DiLoCo sync interval would relax it.)")
+    print("  (* = infeasible in window; wall = full-stock floor. int4-only-4x hits the WAN wall at")
+    print("   k=1 because weights are broadcast every step; sync_interval k>=2 divides that by k.)")
 
 
 def policy_framing(base):
@@ -981,8 +981,9 @@ def main(argv=None):
         write_max_compute_by_stock_csv(base, windows_d=windows)
         write_er_csv(base, targets=targets)
     print("\n  CAVEATS: MoE decode native (active-path bandwidth, dense KV). Residual optimism: no")
-    print("  training FSDP penalty (A-ii, penalty_para=1); no Rahman eta + broadcast-every-step")
-    print("  (A-iii, compression stands in for the DiLoCo sync interval -> WAN bound pessimistic).")
+    print("  training FSDP penalty (A-ii, penalty_para=1); staleness is free (A-iii/A-vi: sync_interval")
+    print("  k relaxes the broadcast but its sample-efficiency cost is not charged); stage times use the")
+    print("  MEAN response length (A-vii: no straggler/tail penalty).")
 
 
 if __name__ == "__main__":

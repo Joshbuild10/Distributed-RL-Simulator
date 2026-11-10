@@ -1,6 +1,6 @@
 # SIMULATOR_MAP — spec ↔ code reconciliation
 
-> **DRAFT, auto-assembled from the code on 2026-08-17; refreshed 2026-09-09 (layout, A-viii, A-x).** Intended to be redrafted by hand.
+> **DRAFT, auto-assembled from the code on 2026-08-17; refreshed 2026-11-10 (ω in waves, A-iii, A-x closed).** Intended to be redrafted by hand.
 > Purpose: satisfy PROJECT_CONTEXT §4 ("inventory actual modules/functions vs the spec, flag
 > discrepancies rather than silently fixing them"). Numbers here are reproduced by
 > `python -m validation.validate`.
@@ -9,6 +9,7 @@
 
 | Path | Role |
 |---|---|
+| `MODEL_CALCULATIONS.md` | Every equation the code computes, with notation and code identifiers (report Appendix B) |
 | `specs.py` | Dataclasses: `ModelSpec`, `RLSpec`, `AlgoSpec`, `HWSpec`, `NetSpec`, `VerifySpec`, `Scenario` |
 | `model.py` | Analytic core: `training_compute`, `training_time`, `training_memory`, `rollout_terms`, `verify_time`, `broadcast_time`, `n_steps`, `simulate` |
 | `validation/presets.py` | Published run scenarios (INTELLECT-2/3, prime-rl ×2, AReaL ×4) + hardware/model constants |
@@ -36,7 +37,7 @@
 | `seq_par = floor(free_mem / KV_provision)` | `model.rollout_terms` | ✅ + `kv_provisioning ∈ {peak,expected}` |
 | `T_decode = max(comp, mem)` roofline | `model.rollout_terms` | ✅ |
 | `T_prefill`, `T_inf_attn`, `T_env` | `model.rollout_terms` | ✅ |
-| `T_rollout = (…)·n_microbatches·ω` | `model.rollout_terms` | ✅ (see deviation 1) |
+| `T_rollout = (…)·n_microbatches·ω` | `model.rollout_terms` | ✅ (see deviation 1); ω enters as `ω·B` sequences in the waves, so oversampling fills spare groups in parallel rather than multiplying time |
 | `T_verify` rule- and model-based | `model.verify_time` | ✅ |
 | `T_broadcast = vol/bw + latency` | `model.broadcast_time` | ✅ one-directional (Rahman's has ×2) |
 | Policy age (= `sync_interval`) | `model.simulate` | ✅ reported as `policy_age`; **not wired into `N_steps`** |
@@ -46,7 +47,7 @@
 
 ## Deliberate deviations from the spec (do not "fix")
 
-1. **Per-wave mean fill.** Rollout terms charge `seqs_per_wave = size_batch/(n_nodes·waves)`, not a
+1. **Per-wave mean fill.** Rollout terms charge `seqs_per_wave = ω·size_batch/(active_groups·waves)`, not a
    full `seq_par` per microbatch — the `ceil()` overshoot double-charged the last, mostly-empty
    wave and got worse as `seq_par` rose. This alone took INTELLECT-3 from +35% → +5% at the time.
 2. **MoE decode bandwidth.** `mem_weights_decode = b·(p_active + p_head)`, clamped at
@@ -74,13 +75,12 @@
 |---|---|---|
 | A-i | Single-turn only | Multi-turn agentic effective context (measured ~2k–123k median across four environments) not represented |
 | A-ii | `penalty_para = 1.0` | Trainer optimistic at high FSDP shard degree — the residual in the AReaL 14B/32B rows |
-| A-iii | No Rahman η / DiLoCo outer loop; weights broadcast **every** step | WAN/broadcast bound is *pessimistic*; `compression` stands in for the sync interval |
+| A-iii | No Rahman η / DiLoCo outer loop | `sync_interval` k ≥ 2 amortises the broadcast over k steps (per-step cost ÷ k), but its convergence cost is not charged (see A-vi), so large k reads as a free win. At the default k = 1 weights are broadcast every step |
 | A-iv | Inference limited to ONE serving group | A group is `inf_tp` tensor-parallel nodes (`inf_tp_max=1` ⇒ a single node). TP collectives (per-layer AllReduce; AllToAll once KV shards past `n_kv_heads`) are **not** charged — `inf_tp_max` stands in for what the fabric sustains |
 | A-v | No inter-learner communication term | Multiple trainer nodes are data-parallel replicas with no sync cost (`penalty_para = 1.0`); assumes a co-located learner. Would not hold for WAN-separated learner sites |
 | A-vi | Staleness quality penalty is a diagnostic | `policy_age` reports the configured `k`; its sample-efficiency cost is not wired into `N_steps` (would create a fixed point) |
-| A-vii | Heterogeneous hardware only via lumped `capacity_mult` | Straggler/length-variance tail penalty designed, not coded |
+| A-vii | Stage times use the MEAN response length; heterogeneous hardware only via lumped `capacity_mult` | Assumes continuous batching keeps every slot full across step boundaries. In the single-wave regime (the decentralised ceiling) the last sequence to finish is near `R_max`, not `R`, so the rollout floor is optimistic by up to `R_max/R` (2x at the defaults). Straggler/tail penalty designed, not coded |
 | A-viii | Facility power factor is a **flat constant** | `FACILITY_PUE = 1.6` multiplies board TDP in `node_gpus_power_cap`/`sites_power`, so every power figure is draw at the meter. One number stands in for host/network/conversion/cooling across every GPU family and site design |
-| A-x | Inference sizing probes a `GPU_STEP` node first | `_min_gpus_at_tp`/`optimal_split` test `model_fits` at a 16-GPU node, so a model that fits only a FULL node (e.g. Kimi-K3 on a 72-GPU node) is reported `no-fit`. Latent for every published figure (Llama-405B/H100 fits at 16); see the review note |
 | A-ix | `stock_gpus` counts **physical chips** | Not renormalised to H100-equivalents when `gpu` changes, so cross-family sweeps compare fixed chip counts, not fixed compute |
 
 ## Unit conventions

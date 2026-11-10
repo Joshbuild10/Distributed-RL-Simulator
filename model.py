@@ -260,14 +260,18 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     c_decode = c_dec_layers + c_dec_attn
 
 
+    # Oversampled rollouts are generated alongside the batch, so they fill spare groups before adding waves.
+    oversample_ratio = rl.oversample_ratio()
+    n_gen = rl.size_batch * oversample_ratio
+
     # A "wave" is a continuously-batched set of sequences with rollouts generation.
     # To distribute the workload evenly across waves, we calculate the average sequences per wave
     # We allocate at least one sequence per group of connected nodes. With extras left idling.
     n_groups = max(1, hw.n_nodes // tp)
-    active_groups = min(n_groups, max(1, rl.size_batch)) if seq_par else 0
+    active_groups = min(n_groups, max(1, math.ceil(n_gen))) if seq_par else 0
 
-    n_waves = math.ceil(rl.size_batch / max(seq_par * active_groups, 1)) if seq_par else float("inf")
-    seqs_per_wave = rl.size_batch / (active_groups * n_waves) if seq_par else float("inf")
+    n_waves = math.ceil(n_gen / max(seq_par * active_groups, 1)) if seq_par else float("inf")
+    seqs_per_wave = n_gen / (active_groups * n_waves) if seq_par else float("inf")
 
     # Time calculations (per wave)
     t_dec_comp = (c_decode * seqs_per_wave) / grp_flops if seq_par else float("inf")
@@ -281,10 +285,8 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     t_prefill = (c_prefill * seqs_per_wave) / grp_flops if seq_par else float("inf")
     t_env = v.t_env_per_rollout
 
-    oversample_ratio = rl.oversample_ratio()
-
-    # Overall step time
-    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves * oversample_ratio
+    # Overall step time (oversampling already counted in the waves)
+    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves
 
     # Total rollout FLOPs executed (to calculate compute-ratios). c_prefill is already per-response --
     # divided by the group above when prefix-cached -- so each response counts its prefill once either

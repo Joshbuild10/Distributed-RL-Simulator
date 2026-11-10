@@ -259,7 +259,7 @@ class FeasConfig:
     prompts_per_batch: int = 128
     responses_per_prompt: int = 512     # High batch size to allow
     prompt_len: int = 1000
-    er: float = 20_000.0                # E[R]. Slightly conservative long-context default for Qwen3-235B
+    er: float = 20_000.0                # E[R]. Long-context default, anchored on the measured-length campaign
     er_cv: float = 0.5
     omega: float = 1.5                  # Oversampling/filtering degree
     b_optimiser: float = 4.0            # Muon optimiser
