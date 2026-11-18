@@ -30,8 +30,9 @@ when writing.
 import math
 from dataclasses import dataclass, field, replace
 
-from specs import ModelSpec, RLSpec, AlgoSpec, HWSpec, NetSpec, VerifySpec, Scenario
+from specs import ModelSpec, RLSpec, AlgoSpec, HWSpec, NetSpec, VerifySpec, PenaltySpec, Scenario
 from model import simulate
+import penalties as pen
 
 # ---------------------------------------------------------------------------
 # GPU / server-family presets  (per-GPU bf16 dense peak; HBM GB; HBM BW TB/s; board W)
@@ -251,6 +252,10 @@ class FeasConfig:
     train_gpus_per_node: int = 128      # Update node (holds a full model replica). Single nodes are resized DOWN to the min GPUs that fit the replica
     wan_mbps: float = 1_000.0
     compression: float = 16.0           # weight-sync compression.
+    train_distributed: bool = True      # Trainer nodes at separate sites: every step all-reduces gradients over the
+                                        #   same link as the broadcast. False = co-located (sync free)
+    grad_compression: float = 150.0     # Gradient compression on that all-reduce: Rahman's default (4-bit + top-k
+                                        #   sparsification with error feedback; Covenant-72B ran 146x)
     sync_interval: float = 1            # Off-policy staleness degree k
     inf_tp_max: int = 1                 # Largest tensor-parallel serving group the fabric allows (nodes/group).
 
@@ -275,6 +280,9 @@ class FeasConfig:
     gpu_hr_usd: float = 2.0
     stock_gpus: int = 1_500_000
     site_power_mw: float = 5.0         # per-site FACILITY power cap, MW (detectability tier)
+
+    # Rahman's distributed-training penalties (penalties.py). Off by default.
+    penalty: PenaltySpec = field(default_factory=PenaltySpec)
 
     def build(self, n_train_gpus, n_inf_gpus, tp=1):
         # Trainer: whole train_gpus_per_node-GPU replica nodes, or ONE right-sized node (<= that) when
@@ -314,6 +322,7 @@ class FeasConfig:
                       oversample_override=self.omega, prefix_caching=True),
             algo=AlgoSpec(b_optimiser=self.b_optimiser, recomp_act=1, recomp_old=0, opt_steps=1,
                           compression_ratio=self.compression,
+                          grad_compression=self.grad_compression if self.train_distributed else 1.0,
                           sync_interval=self.sync_interval,   # k>=1 => overlapped (max); k=0 => serial (sum)
                           b_weights_inf=self.b_weights_inf, b_kv=self.b_kv,
                           act_site_parallel=True),   # replica node: activation SP-sharded within the node
@@ -321,8 +330,11 @@ class FeasConfig:
                             mfu=self.mfu_train, penalty_para=1.0, n_shard=train_node, **train_nh),
             inf_hw=HWSpec("inference", n_nodes=n_inf_nodes, gpus_per_node=inode,
                           mfu=self.mfu_inf, bw_eff=0.85, inf_tp=tp, **inf_nh),
-            net=NetSpec(bandwidth=self.wan_mbps * 1e6 / 8, latency=0.5),
+            net=NetSpec(bandwidth=self.wan_mbps * 1e6 / 8, latency=0.5,
+                        train_bandwidth=self.wan_mbps * 1e6 / 8 if self.train_distributed else None,
+                        train_latency=0.5 if self.train_distributed else 0.0),
             verify=VerifySpec(mode="rule", seconds_per_rollout=0.5, n_verifier_workers=10000),
+            penalty=self.penalty,
         )
 
 
@@ -362,7 +374,7 @@ def total_time(cfg, n_train_gpus, n_inf_gpus, tp=1):
     if (r is None or not math.isfinite(r.t_step) or r.t_step <= 0
             or not r.ro.model_fits or not r.mem.fits):
         return float("inf"), r
-    return n_steps(cfg) * r.t_step, r
+    return n_steps(cfg) * r.t_step / r.goodput, r
 
 
 # ONE sizing routine underpins BOTH solvers, so they can never disagree: given a per-step time
@@ -390,7 +402,7 @@ def _tp_candidates(cfg):
     return out
 
 
-def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp):
+def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp, tsb):
     """min_gpus_for_tsb at ONE serving-group size, against per-stage budgets. See that docstring."""
     step = GPU_STEP
     per_gpu_flops = GPUS[cfg.gpu]["flops"] * cfg.mfu_train
@@ -444,6 +456,12 @@ def _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp):
     tt, r = total_time(cfg, n_train, n_inf, tp)
     if r is None or not math.isfinite(tt) or gpus_of(r) > stock:
         return None
+    # The stages were sized separately; the step they compose must still fit. Penalties make this
+    # bind: the broadcast tail grows with the inference node count chosen above, and replica sync
+    # adds to the update. The inference count is already the smallest that meets its budget, so a
+    # miss here has no cheaper fix at this tp and split.
+    if r.t_step > tsb * (1 + 1e-9):
+        return None
     return dict(n_train=n_train, n_inf=n_inf, tp=tp, gpus=gpus_of(r), tt=tt, r=r)
 
 
@@ -480,7 +498,7 @@ def min_gpus_for_tsb(cfg, tsb, budget=None):
     best = None
     for tp in _tp_candidates(cfg):
         for roll_b, upd_b in splits:
-            sol = _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp)
+            sol = _min_gpus_at_tp(cfg, roll_b, upd_b, stock, tp, tsb)
             if sol is not None and (best is None or sol["gpus"] < best["gpus"]):
                 best = sol
     return best
@@ -531,8 +549,15 @@ def min_cluster(cfg, target_s):
     steps = n_steps(cfg)
     if not (math.isfinite(steps) and steps > 0):
         return None
-    sol = min_gpus_for_tsb(cfg, target_s / steps)
-    if sol is None:
+    # Goodput stretches the wall-clock, so the per-step budget is window * u / N_steps. u depends a
+    # little on the allocation (failure rate scales with GPUs), so re-solve until the run fits.
+    tsb = target_s / steps
+    for _ in range(4):
+        sol = min_gpus_for_tsb(cfg, tsb)
+        if sol is None or sol["tt"] <= target_s * (1 + 1e-9):
+            break
+        tsb *= target_s / sol["tt"]
+    if sol is None or sol["tt"] > target_s * (1 + 1e-9):
         return None
     r, g = sol["r"], sol["gpus"]
     return dict(gpus=g, nt=r.scenario.train_hw.n_nodes, ni=r.scenario.inf_hw.n_nodes,
@@ -568,6 +593,9 @@ def evaluate(cfg, window_s):
         wall_s=tt, wall_d=(tt / 86400 if runnable else float("inf")),
         cost=cost, bottleneck=(r.bottleneck if r else "no-fit"),
         pct_stock=100 * gpus / cfg.stock_gpus, r=r,
+        # Quality factor (penalties.py): what the compute is worth vs a co-located run. Reported
+        # alongside, never used to size -- quality-adjusted compute is a separate presentation.
+        eta=(r.eta if r else 1.0), goodput=(r.goodput if r else 1.0),
         # Training steps to spend cfg.target_c_rl at this RL config -- a property of the batch
         # size/model/target, NOT of the cluster or window (per_step_flop is node-count-independent).
         steps=n_steps(cfg) if runnable else float("nan"),
@@ -603,11 +631,27 @@ def required_bcast_mbps(cfg, window_s):
     t_compute = max(r.t_update, r.stages["rollout+verify"])   # broadcast hides behind the slower stage
     lat = r.scenario.net.latency
     k = max(r.scenario.algo.sync_interval, 1)                 # k>=2 amortises the broadcast over k steps
-    budget = k * t_compute - lat
+    # Penalties put a fan-out tail f on (volume / bw + latency); hidden iff f*(V/bw + lat) <= k*t_compute.
+    p = r.scenario.penalty
+    f = pen.straggler_factor(r.scenario.inf_hw.n_nodes, p.inf_mode) if p.enabled else 1.0
+    budget = k * t_compute / f - lat
     if not (math.isfinite(t_compute) and budget > 0):
         return None, ev
     raw_weight_bytes = cfg.b_weights_inf * cfg.model.p_total  # uncompressed broadcast volume (1x)
-    return raw_weight_bytes * 8 / 1e6 / budget, ev
+    need = raw_weight_bytes * 8 / 1e6 / budget
+    # A distributed trainer also all-reduces gradients every step (up + down, no k amortisation) over
+    # the same link; the requirement is whichever transfer needs more.
+    hw = r.scenario.train_hw
+    n_rep = hw.n_nodes // max(1, math.ceil(hw.n_shard / hw.gpus_per_node))
+    if cfg.train_distributed and n_rep > 1:
+        fs = pen.straggler_factor(n_rep, p.mode) if p.enabled else 1.0
+        sync_budget = t_compute / fs - lat
+        if sync_budget <= 0:
+            return None, ev
+        # Its own compression, so convert to the broadcast's 1x basis: the link x broadcast compression
+        need = max(need, 2 * r.scenario.algo.b_grads * cfg.model.p_total * cfg.compression
+                   / cfg.grad_compression * 8 / 1e6 / sync_budget)
+    return need, ev
 
 
 # arXiv 2603.12151's largest empirically tested rollout batch. Not a bound on the sweep below
@@ -685,13 +729,14 @@ def max_compute_operating_point(cfg, stock=None):
                 t_broadcast=r.t_bc, bottleneck=r.bottleneck,
                 mfu_model=model_flops_step / (r.t_step * total_peak),
                 mfu_hw=pf / (r.t_step * total_peak),
-                per_step_flop=pf)
+                per_step_flop=pf, goodput=r.goodput, eta=r.eta)
 
 
 def steps_and_c_rl(op, window_s):
     """Window-dependent numbers from an operating point: (steps, max achievable C_RL). Pure
-    arithmetic, so sweeping many windows over one op is free."""
-    steps = window_s / op["t_step"]
+    arithmetic, so sweeping many windows over one op is free. Goodput removes failure downtime;
+    multiply by op["eta"] separately for quality-adjusted compute."""
+    steps = window_s * op.get("goodput", 1.0) / op["t_step"]
     return steps, op["per_step_flop"] * steps
 
 
@@ -764,6 +809,7 @@ def config_lines(cfg):
         f"{' (tensor-parallel allowed; solver picks the smallest that wins)' if cfg.inf_tp_max > 1 else ' (no cross-node inference sharding)'}",
         f"wan_mbps: {cfg.wan_mbps:g}",
         f"compression: {cfg.compression:g}x",
+        f"trainer: {f'distributed -- gradient all-reduce every step over the same link at {cfg.grad_compression:g}x' if cfg.train_distributed else 'co-located (gradient sync free)'}",
         f"sync_interval (off-policy k): {cfg.sync_interval:g} "
         f"({'on-policy, serial/sum' if cfg.sync_interval < 1 else f'{cfg.sync_interval:g}-step off-policy, overlapped/max, broadcast /{max(cfg.sync_interval,1):g}'})",
         f"batch: {cfg.prompts_per_batch} prompts x {cfg.responses_per_prompt} responses "
@@ -778,4 +824,14 @@ def config_lines(cfg):
         f"gpu_hr_usd: ${cfg.gpu_hr_usd:g}",
         f"stock_gpus: {cfg.stock_gpus:,}",
         f"site_power_mw: {cfg.site_power_mw:g} (facility draw, board TDP x {FACILITY_PUE:g})",
+        penalty_line(cfg.penalty),
     ]
+
+
+def penalty_line(p):
+    """One config line for the Rahman penalty toggle."""
+    if not p.enabled:
+        return "penalties: off (penalty-free roofline)"
+    return (f"penalties: ON (Rahman) -- trainer mode {p.mode}, inference mode {p.inf_mode}, "
+            f"H={p.h_inner or 'auto'}, "
+            f"failures {p.failure_rate:g}/GPU-h, quality '{p.scenario}' (eta reported, never sizes)")

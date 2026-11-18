@@ -25,6 +25,9 @@ and the documented first-cut biases.
 import argparse
 import math
 
+import penalties as pen
+from specs import PenaltySpec
+
 from feasibility_core import (
     GPUS, MODELS, DEFAULT_MODEL, MODEL_TARGETS, POLICY_THRESHOLDS,
     HIGH_BATCH, BASELINE_BATCH, BATCH_CAP, BATCH_SWEEP, HBM_MULTS, HIGH_END_GPUS, FeasConfig,
@@ -194,7 +197,7 @@ def max_compute_table(base, windows_d=(30, 90, 180, 720)):
     print("     of the mfu_train/mfu_inf config inputs. hw-FLOPs (8N, includes recompute) is the")
     print("     convention published RL-training MFU figures use, e.g. prime-rl's 38%; the model-")
     print("     FLOPs (6N) figure is in the CSV as mfu_model.)")
-    thr = op["per_step_flop"] / op["t_step"]
+    thr = steps_and_c_rl(op, 1.0)[1]                 # FLOP/s, net of failure downtime
     print(f"  throughput: {thr:.3e} FLOP/s  =  {thr*86400:.3e} FLOP/day")
     print(f"\n  {'window':>8}{'steps':>12}{'max C_RL':>14}   covers")
     targets = all_targets()
@@ -870,6 +873,16 @@ def build_parser():
     ap.add_argument("--targets", type=str, default=None,
                     help="comma-separated subset of target labels (default: all model+threshold)")
     ap.add_argument("--windows", type=str, default="30,90,180,720", help="comma-separated windows in days")
+    ap.add_argument("--colocated-trainer", action="store_true",
+                    help="trainer nodes in one datacentre (gradient all-reduce free); default is distributed")
+    ap.add_argument("--grad-compression", type=float, default=None,
+                    help="gradient compression on the distributed trainer's all-reduce (default 150x, Rahman)")
+    ap.add_argument("--penalties", action="store_true",
+                    help="apply Rahman's distributed-training penalties (penalties.py); eta is reported, never sizes")
+    ap.add_argument("--penalty-mode", choices=pen.MODES, default=None,
+                    help="trainer straggler/failure mitigation (default relay)")
+    ap.add_argument("--inf-penalty-mode", choices=pen.MODES, default=None,
+                    help="inference waves + broadcast fan-out (default async: streaming never waits)")
     ap.add_argument("--csv", action=argparse.BooleanOptionalAction, default=None,
                     help="write CSVs (default: on for --mode thorough/models, off otherwise)")
     ap.add_argument("--fine-split", action="store_true",
@@ -892,6 +905,13 @@ def config_from_args(a):
             over[fld] = v
     if a.batch:
         over.update(_parse_batch(a.batch))
+    if a.colocated_trainer:
+        over["train_distributed"] = False
+    if a.grad_compression is not None:
+        over["grad_compression"] = a.grad_compression
+    if a.penalties or a.penalty_mode or a.inf_penalty_mode:
+        pk = {k: v for k, v in (("mode", a.penalty_mode), ("inf_mode", a.inf_penalty_mode)) if v}
+        over["penalty"] = PenaltySpec(enabled=True, **pk)
     return with_cfg(cfg, **over) if over else cfg
 
 

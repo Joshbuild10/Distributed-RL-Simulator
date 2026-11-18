@@ -69,7 +69,8 @@ C_update       = (3 + recomp_act + recomp_old) * (C_layers + C_dot-attention)
 
 **Time.**
 ```
-T_update = C_update / (F_train * MFU_train * tput_mult_train * Penalty_para * n_train)
+T_comp   = C_update / (F_train * MFU_train * tput_mult_train * Penalty_para * n_train)
+T_update = max(T_comp, T_sync)                          (T_sync = 0 for a co-located trainer, §5)
 ```
 - `Penalty_para` (inter-node throughput loss) is held at 1: trainer nodes are co-located data-parallel
   replicas (gap A-ii, A-v).
@@ -193,6 +194,22 @@ T_broadcast   = (Vol_broadcast / bandwidth_net + latency) / max(k, 1)
 ```
 - `k = 0` and `k = 1` both broadcast every step; `k >= 2` broadcasts once every `k` steps, so its
   per-step cost is `1/k` of a full sync.
+
+**Trainer all-reduce** (`train_distributed`, the default). Trainer nodes sit at separate sites, so every
+step the replicas average their gradients over the same link as the broadcast:
+```
+T_sync = 2 * b_grads * P_total / grad_compression / bandwidth_net + latency    (n_train > 1; else 0)
+```
+- `grad_compression = 150` (Rahman's default: 4-bit + top-k sparsification with error feedback;
+  Covenant-72B ran 146x). The broadcast keeps its own `compression` (16x).
+- Sent and received (the factor 2), and paid **every step**: `H = 1`, and unlike the broadcast it is
+  not amortised by `k`. It binds only if `grad_compression < 2 * compression / k`: at 150x vs 16x it
+  is ~0.21x the broadcast (87 s vs 406 s for Llama-405B at 1 Gbps), so the broadcast stays the wall.
+  At 16x it would be 810 s, halving the ceiling.
+- Overlapped with compute, hence `T_update = max(T_comp, T_sync)`. More trainer nodes cannot shorten
+  it, so it is a per-step floor for any run needing more than one trainer node.
+- `train_distributed = False` is the co-located trainer (datacentre fabric, sync free); the
+  centralised comparator's 1 Tbps link makes it ~1 s either way.
 - One-directional, single link, no topology (relay trees, fan-out) and no rollout upload.
 - `compression` covers quantisation and sparsification together (16x in the study = int4 x 4x).
 
@@ -287,25 +304,88 @@ TPP_chip      = F_gpu,bf16 * 16                            (= FLOP-equivalents a
 g_cap         = min( floor(16 * TPP_H100 / TPP_chip), floor(16 * 80 GB / M_gpu) )
 ```
 
+## 9. Distributed-training penalties (optional, `PenaltySpec.enabled`)
+
+Ported from Rahman's simulator (`penalties.py`, functions identical to `evasion_calculator.py` @ 7b94d81).
+Off by default; with it off every number above is unchanged. `f_tail(n)` is his slowest-of-`n` tail:
+```
+f_tail(n) = 1 + k_mode * 0.05 * log2(n)          k_mode: 1 synchronous/none, 0.4 relay (default),
+                                                         0.3 backup_workers, 0 threshold/async
+```
+
+**Trainer.** Replicas are groups of `S` pipeline stages (`S = ceil(Mem_train / M_train)`, 1 when a
+replica fits a node); `n_grp = floor(n_train / S)`.
+```
+T_rep  = C_update / n_grp / (F_train * MFU_train)                  one replica's update on one stage slot
+T_comp = T_rep                                                     S = 1
+       = (M + S - 1) * (T_rep / (S * M) + (T_handoff + lat_pp) * f_tail(S))     S > 1 (GPipe, M = 8)
+    T_handoff = 2 * (tok_batch / n_grp) * D * b_weights_train / C_act / M / bw_pp
+T_sync = (§5 trainer all-reduce) * f_tail(n_grp)                                n_grp > 1
+H      = 1 (synchronous DDP; see below). Unset: ceil(T_sync / T_comp), Rahman's DiLoCo, for parity only
+T_update = max(T_comp, T_sync / H)                                 streaming; else T_comp + T_sync / H
+```
+- The sync uses the trainer link (§5): the WAN for a distributed trainer, else the co-located fabric
+  (`g_train * 50 GB/s`, 400 Gb/s IB per GPU, 10 µs). Pipeline handoffs default to the fabric
+  (`pp_bw`). WAN/regional values with `h_inner = None` reproduce his flat and PP-group DiLoCo.
+- `mem.fits` still gates the solver, so pipelined trainers (`S > 1`) only arise in scenarios built
+  directly (e.g. testing 16-GPU trainer nodes).
+- `H = 1` because local steps have no clean RL meaning: between syncs each replica holds a different
+  policy, so inference must either sample from one replica (off-policy for the rest), wait for the
+  average (staleness `>= H`), or run as `n_grp` separate RL runs merged every `H` steps. His `η_H` is
+  calibrated on pre-training DiLoCo with a fixed data stream; in RL the data depends on the policy, so
+  replica drift also shifts what is sampled. At `H = 1`, `η_H = 1` and the replica loss is exactly 1.
+
+**Inference.** No gradients move, so no quality terms apply; only throughput:
+```
+T_rollout   *= f_tail(active_groups)       each wave ends when its slowest serving group does
+T_broadcast *= f_tail(n_inf)               the fan-out ends when the slowest receiver does
+```
+Tails use `inf_mode`, **async by default**: streaming generation never waits on a slow node, so both
+tails are 1. `relay` gives `1 + 0.02 * log2(n)` (x1.25 at ~6k nodes) as a sensitivity. Not modelled:
+pipelining one model across inference nodes (still no-fit) and tensor-parallel collectives (gap A-iv).
+
+**Goodput** stretches the run, `T_total = N_steps * T_step / u`, with `u = u_train * u_inf`:
+`u_train` is his `reliability()` over the trainer GPUs (checkpoint/restart semantics by mode), and
+`u_inf = exp(-λ * t_rec)` — a failed inference node loses only its in-flight sequences, nothing stalls.
+
+**Quality** discounts what the compute is worth and never changes time:
+```
+η = η_H * η_comp * η_act * η_mit * η_replica
+    η_H    = max(0.4, 1 - α(P) * log10(H)),  α(P) = 0.08 / (1 + log10(P / 1e9) / 5)    n_grp > 1
+    η_comp = his pseudo-gradient table at the gradient compression (EF, "expected")  n_grp > 1
+    η_act  = q(C_act) ^ (2 * (S - 1))                                                  S > 1
+    η_mit  = 0.85 threshold, 0.97 async, else 1                                        n_grp > 1
+```
+His replica penalty is a loss multiplier `M^β(P,H)` that he turns into FLOP through the Chinchilla
+pre-training law. Here the multiplier is reported (`pen.replica_loss`) and the Chinchilla conversion
+(`penalties.replica_flop_penalty`) is for separate reporting only — it asks what from-scratch
+pre-training compute buys back the loss, which has no RL analogue. Both are 1 at `H = 1`.
+
+**In the solver.** `T_run = N_steps * T_step / u`, and `min_cluster` shrinks the per-step budget by `u`.
+`η` is carried on every result (`evaluate`, the max-compute point) but **never sizes anything**:
+quality-adjusted compute, `C_RL * η`, is a separate presentation. Because the broadcast tail grows with
+the inference node count the solver picks, the solver now also checks that the composed step fits its
+budget. Toggle: `FeasConfig.penalty`, `feasibility.py --penalties`, `PENALTIES=on` for the dashboard.
+
 ### What this means at the threat-model operating point
 
-Llama-3.1-405B, H100, 16-GPU inference nodes, 1 Gbps, 16x, `R = 20k`, `B = 65,536`, `ω = 1.5`,
-1.5M-GPU stock:
+Llama-3.1-405B, H100, 16-GPU inference nodes, distributed 128-GPU trainer nodes, 1 Gbps, 16x,
+`R = 20k`, `B = 65,536`, `ω = 1.5`, 1.5M-GPU stock:
 
 | Term | Value |
 |---|---|
+| `T_broadcast` | **406 s — the binding stage** |
+| `T_sync` | 87 s: 2 × 810 GB / 150 over 1 Gbps, every step (hidden) |
+| `T_update` | 405 s on 31,232 trainer GPUs (244 nodes) |
 | `B_gen` | 98,304 sequences over 6,443 inference nodes: 1 wave at ~15 per node (`seq-parallel` = 22) |
 | `T_decode_mem` | 354 s — streaming 806 GB of decode weights (`P_active + P_head`) 20,000 times through one node |
-| `T_decode_comp`, `T_inf-attention`, `T_prefill` | 59 s, 47 s, ~0 s |
 | `T_rollout` = 354 + 47 (decode is memory-bound, so `T_decode_comp` hides) | 401 s |
-| `T_update` | 405 s on 31,232 trainer GPUs |
-| `T_broadcast` | **406 s — the binding stage** |
 | GPUs allocated | 134,320 of 1,500,000: more hardware cannot shorten a step below the broadcast |
 | `C_RL,max` | 2.6e26 (180 d), 1.0e27 (720 d) |
 
 So at the stock frontier the decentralised ceiling is the weight broadcast — `link * compression`
-(1 Gbps x 16) and `k` — with `T_decode_mem` (per-node HBM bandwidth over `R` tokens) only 13% below it.
-Relaxing the broadcast (more compression, `k >= 2`) exposes the 354 s weight-streaming floor next.
+(1 Gbps x 16) and `k` — with weight streaming (354 s) just below it. The trainer's all-reduce only
+takes over if gradients are compressed less than ~32x (810 s at 16x, halving the ceiling).
 
 ### Headline numbers at these inputs
 
@@ -350,6 +430,6 @@ Maximum `C_RL` in 180 d on a fixed stock, decentralised vs the centralised compa
 | Precision | BF16 weights/grads/KV; optimiser 4 B/param (Muon) |
 | `MFU_train`, `MFU_inf` | 0.40, 0.30 |
 | GPU | H100: 989 TFLOP/s BF16, 80 GB, 3.35 TB/s, 700 W |
-| Nodes | 128-GPU trainer, 16-GPU inference, `tp = 1` (centralised comparator: 72-GPU, `tp <= 4`, 1 Tbps) |
-| Network | 1 Gbps, 16x compression, 0.5 s latency |
+| Nodes | 128-GPU trainer at separate sites, 16-GPU inference, `tp = 1` (centralised comparator: 72-GPU, `tp <= 4`, 1 Tbps) |
+| Network | 1 Gbps, 0.5 s latency for both the broadcast (16x) and the trainer all-reduce (150x gradients) |
 | Stock | 1.5M GPUs; 5 MW sites |

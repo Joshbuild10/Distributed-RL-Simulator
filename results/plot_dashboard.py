@@ -22,6 +22,7 @@ from validation.presets import (intellect2, intellect3, primerl_paper,
 from validation.uncertainty import mc_step_time, MC_DRAWS, MFU_INF_RANGE, ER_PCT
 from validation.solvers import solve_for_mfu
 from model import simulate
+from specs import PenaltySpec
 from feasibility_core import (FeasConfig, MODELS, POLICY_THRESHOLDS, GPUS, HIGH_BATCH,
                               BASELINE_BATCH, BATCH_CAP, BATCH_SWEEP, HBM_MULTS, HIGH_END_GPUS,
                               batch_split, target_batch, target_batch_iso, all_targets, model_targets, evaluate,
@@ -38,7 +39,10 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "results/dashboard.html"
 # reads back -- measurement exhaust, not a dashboard input) so results/ is self-contained and
 # git-trackable: clone the repo, run this script, get the same dashboard, section 3 included.
 LEN = "results/lengths"
-base = FeasConfig(target_c_rl=2.5e25)
+# PENALTIES=on applies Rahman's distributed-training penalties (penalties.py) to every chart: trainer
+# replica sync + goodput, inference/broadcast straggler tails (async by default: streaming never waits).
+PENALTIES = os.environ.get("PENALTIES", "off").lower() in ("1", "on", "true", "yes")
+base = FeasConfig(target_c_rl=2.5e25, penalty=PenaltySpec(enabled=PENALTIES))
 GPN = base.gpus_per_node
 
 
@@ -362,7 +366,7 @@ LABEL_STOCK = {v: k for k, v in STOCK_LABEL.items()}
 def max_c_rl_at_stock(cfg, stock, window_s):
     """Bar-chart value: max achievable C_RL at a stock/window."""
     op = max_op_at_stock(cfg, stock)
-    return None if op is None else op["per_step_flop"] * window_s / op["t_step"]
+    return None if op is None else steps_and_c_rl(op, window_s)[1]
 
 
 stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], [(f"{d}d", PAL[i]) for i, d in enumerate(WIN)],
@@ -389,9 +393,9 @@ stockfig = grouped_bars([STOCK_LABEL[s] for s in STOCK_SWEEP], [(f"{d}d", PAL[i]
 # bars IS the decentralisation penalty. RETUNE FREELY: edit the dicts (keys are FeasConfig fields),
 # nothing else. 405B is dense, so bottleneck (iii) is out of scope here by design. Four charts:
 # a primary pair at DC_COMP (16x) sync -- 2n min-GPUs-by-budget, 2o max-compute-by-stock -- and a
-# companion pair at lighter 4x sync -- 2p, 2q -- where the WAN/broadcast wall shows (at 16x the
-# broadcast is small enough that the WAN is inert and the penalty is purely inference-wave/node-
-# size; drop to 4x and the 1 Gbps decentralised link becomes the binding constraint).
+# companion pair at lighter 4x broadcast compression -- 2p, 2q. Decentralised moves weights over the
+# 1 Gbps WAN every step: the trainer's gradient all-reduce between its sites (87 s at 150x) and the
+# broadcast to inference (406 s at 16x, the binding one). At 4x the broadcast grows 4x and walls far sooner.
 DC_COMP = 16.0                                                        # primary weight-sync compression (4-bit int4 x 4x sparsify/DiLoCo)
 CEN_TP = 4                                                             # max NVL72 racks tensor-parallel per group;
                                                                        #   8 = Llama-405B's n_kv_heads, where clean KV
@@ -401,7 +405,7 @@ DEC = dict(gpus_per_node=16, wan_mbps=1_000, compression=DC_COMP,
 CEN = dict(gpus_per_node=72, wan_mbps=1_000_000, compression=DC_COMP,
            inf_tp_max=CEN_TP)                                              # NVL72 domain, 1 Tbps intra-DC fabric
 DEC_INT4 = {**DEC, "compression": 4.0}                                 # companion pair: lighter 4x weight sync,
-CEN_INT4 = {**CEN, "compression": 4.0}                                 #   which lets the WAN/broadcast wall show
+CEN_INT4 = {**CEN, "compression": 4.0}                                 #   which brings the WAN wall forward
 DC_WIN_S = 180 * 86400
 DC_SERIES = [("decentralised", PAL[3]), ("centralised", PAL[2])]
 
@@ -461,16 +465,16 @@ dc_stockfig = grouped_bars([STOCK_LABEL[s] for s in DC_STOCK_SWEEP], DC_SERIES,
 
 dc_frontier_int4 = grouped_bars([_tlab(n) for n in MT], DC_SERIES,
                                 lambda cat, s: fbar(_dccfg(s, _LAB2NAME[cat], int4=True), DC_WIN_S),
-                                f"2p. Same, min GPUs at lighter 4x sync -- exposes the WAN/broadcast wall "
-                                f"(decentralised flips from wave- to broadcast-bound at frontier scale). cf. 2n",
+                                f"2p. Same, min GPUs at lighter 4x broadcast compression -- the WAN/broadcast wall "
+                                f"binds decentralised at much smaller budgets. cf. 2n",
                                 ylab="min GPUs to finish in 180d",
                                 annotfn=lambda cat, s: ffloor(_dccfg(s, _LAB2NAME[cat], int4=True), DC_WIN_S))
 
 dc_stockfig_int4 = grouped_bars([STOCK_LABEL[s] for s in DC_STOCK_SWEEP], DC_SERIES,
                                 lambda cat, s: max_c_rl_at_stock(_with(base, **(CEN_INT4 if s == "centralised" else DEC_INT4)),
                                                                  LABEL_STOCK[cat], DC_WIN_S),
-                                f"2q. Same, max compute vs stock at 4x sync -- decentralised compute PLATEAUS as the "
-                                f"broadcast wall caps it; centralised (terabit) keeps scaling. cf. 2o",
+                                f"2q. Same, max compute vs stock at 4x broadcast compression -- decentralised compute PLATEAUS "
+                                f"lower as the broadcast wall caps it; centralised (terabit) keeps scaling. cf. 2o",
                                 ylab="max achievable RL compute (FLOP)",
                                 annotfn=lambda cat, s: "no-fit", labelfn=fmt_sci,
                                 hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
@@ -531,6 +535,35 @@ dc_node_gpus = grouped_bars([_tlab(n) for n in MT],
                             hollowfn=lambda cat, s: (None if _node_ev(cat, s)["feasible"]
                                                      else _ft(_node_ev(cat, s)["wall_s"]) + "!"),
                             annotfn=lambda cat, s: "no-fit")
+
+# --- 2t/2u: trainer placement. Co-located trainer nodes all-reduce over datacentre fabric (free);
+# distributed ones all-reduce gradients every step over the 1 Gbps WAN, so the compression decides
+# whether that sync or the broadcast is the floor. Dense 405B vs a MoE, since the WAN terms scale with
+# TOTAL parameters while compute scales with ACTIVE ones.
+TRAINER_SERIES = [("co-located trainer", PAL[2], dict(train_distributed=False)),
+                  ("distributed, 150x grads (Rahman)", PAL[0], dict(grad_compression=150.0)),
+                  ("distributed, 16x grads", PAL[3], dict(grad_compression=16.0))]
+_TR_OV = {lab: ov for lab, _, ov in TRAINER_SERIES}
+MOE_MODEL = "Qwen3-235B-A22B"
+
+
+def _trainer_fig(tag, model_key):
+    m = MODELS[model_key]
+    sync = {lab: (2 * 2 * m.p_total / ov["grad_compression"] / (DEC["wan_mbps"] * 1e6 / 8) + 0.5)
+            for lab, _, ov in TRAINER_SERIES if "grad_compression" in ov}
+    return grouped_bars([STOCK_LABEL[st] for st in DC_STOCK_SWEEP], [(lab, col) for lab, col, _ in TRAINER_SERIES],
+                        lambda cat, srs: max_c_rl_at_stock(_with(base, model=m, **DEC, **_TR_OV[srs]),
+                                                           LABEL_STOCK[cat], DC_WIN_S),
+                        f"{tag}. Trainer placement -- max achievable RL compute vs GPU stock ({m.name}, 180d, "
+                        f"decentralised inference at {DC_COMP:g}x). All-reduce per step: "
+                        + ", ".join(f"{v:.0f}s at {_TR_OV[k]['grad_compression']:g}x" for k, v in sync.items()),
+                        ylab="max achievable RL compute (FLOP)",
+                        annotfn=lambda cat, srs: "no-fit", labelfn=fmt_sci,
+                        hlines=[(_hmlab(n), c) for n, c in sorted(MT.items(), key=lambda kv: kv[1])])
+
+
+trainer_dense = _trainer_fig("2t", "Llama3-405B")
+trainer_moe = _trainer_fig("2u", MOE_MODEL)
 
 # --- 2k: effect of mean response length E[R] on feasibility, grouped by RL compute budget (not
 # swept at one fixed target) -- mirrors feasibility.py's er_table(). Standardised on 180d (matching
@@ -710,8 +743,7 @@ for s in STOCK_SWEEP:
                            f"<td colspan='11' class='inf'>no-fit: weights exceed a single node</td></tr>")
         continue
     for d in WIN:
-        steps = d * 86400 / op["t_step"]
-        c_rl = op["per_step_flop"] * steps
+        steps, c_rl = steps_and_c_rl(op, d * 86400)
         stock_trows.append(f"<tr><td>{STOCK_LABEL[s]}</td>"
                            f"<td>{_fn(op['gpus'])} ({100*op['gpus']/s:.1f}%)</td>"
                            f"<td>{d}d</td><td>{_tr(op['frac'])}</td>"
@@ -746,10 +778,12 @@ BODY = f"""<h1>Distributed-RL simulator &mdash; full results dashboard</h1>
 {panel(frontier)}{panel(stockfig)}{panel(tfig)}{panel(crossmodel)}{panel(gpu_hm)}{panel(gpucap_hm)}{panel(bwfig)}{panel(bg_fig)}{panel(batchcompare)}{panel(hbmfig)}{panel(pol_hm)}{panel(er_gpu_fig)}{panel(quant_fig)}
 
 <h3>2.1 &middot; Decentralised vs centralised datacentre &mdash; the serial-latency penalty (Llama-405B, 180d)</h3>
-<p class="sub">The downside of distributed RL is serial step latency: (i) broadcasting fresh weights trainer&rarr;inference over the WAN, and (ii) the number of inference "waves", set by how much aggregate HBM (concurrency + weight-load bandwidth) a node pools. A centralised datacentre relaxes both &mdash; a large NVLink domain fuses GPUs into one fat node ({CEN['gpus_per_node']}/node here, the GB200 NVL72 rack) and an intra-DC fabric gives ~terabit trainer&rarr;inference links ({int(CEN['wan_mbps']/1000):,} Gbps) &mdash; vs small {DEC['gpus_per_node']}-GPU islands on {int(DEC['wan_mbps']):,} Mbps internet. Everything else is held at <code>base</code>, so the gap between paired bars is the decentralisation penalty. <b>Best centralised node size:</b> {_cen_note}. <b>Primary pair (2n, 2o) at {DC_COMP:g}&times; sync:</b> the broadcast doesn't bind the min-GPU runs in 2n, so the penalty there is the inference-wave/node-size effect &mdash; ~2&times; the GPUs at frontier scale (though at small budgets decentralised is actually <i>cheaper</i>: centralised's 2&times;NVL72 floor is 144 GPUs). In 2o the gap holds at ~2&times; up to ~10<sup>5</sup> GPUs, then decentralised saturates at the 1&nbsp;Gbps broadcast floor while centralised keeps scaling. <b>Companion pair (2p, 2q) at lighter 4&times; sync:</b> the broadcast term grows 4&times; and the 1&nbsp;Gbps decentralised link becomes binding &mdash; decentralised flips from wave- to broadcast-bound (2p) and its achievable compute <i>plateaus</i> as the broadcast wall caps it, while centralised (terabit) keeps scaling (2q).</p>
+<p class="sub">The downside of distributed RL is serial step latency: (i) moving weights over the WAN every step &mdash; the trainer's gradient all-reduce between its sites and the broadcast to inference &mdash; and (ii) the number of inference "waves", set by how much aggregate HBM (concurrency + weight-load bandwidth) a node pools. A centralised datacentre relaxes both &mdash; a large NVLink domain fuses GPUs into one fat node ({CEN['gpus_per_node']}/node here, the GB200 NVL72 rack) and an intra-DC fabric gives ~terabit links between every node ({int(CEN['wan_mbps']/1000):,} Gbps) &mdash; vs small {DEC['gpus_per_node']}-GPU islands on {int(DEC['wan_mbps']):,} Mbps internet. Everything else is held at <code>base</code>, so the gap between paired bars is the decentralisation penalty. <b>Best centralised node size:</b> {_cen_note}. <b>Primary pair (2n, 2o) at {DC_COMP:g}&times; sync:</b> below frontier scale the penalty is the inference-wave/node-size effect (and at small budgets decentralised is actually <i>cheaper</i>: centralised's 2&times;NVL72 floor is 144 GPUs). At frontier scale it is ~2&times; the GPUs. In 2o the gap holds at ~2&times; up to ~10<sup>5</sup> GPUs, then decentralised saturates at the 1&nbsp;Gbps broadcast floor (406&nbsp;s/step) while centralised keeps scaling; the trainer's gradient all-reduce (87&nbsp;s at 150&times;) stays under it (see 2t). <b>Companion pair (2p, 2q) at lighter 4&times; broadcast compression:</b> the broadcast grows 4&times;, so the wall binds at far smaller budgets (2p) and decentralised compute <i>plateaus</i> lower (2q).</p>
 {panel(dc_frontier)}{panel(dc_stockfig)}{panel(dc_frontier_int4)}{panel(dc_stockfig_int4)}
 <p class="sub"><b>Inference node size sweep (2r, 2s).</b> The decentralised&rarr;centralised axis made explicit: GPUs per connected NVLink domain from 16 (small donated islands) through 72 (a GB200 NVL72 rack) to 128, WAN/compression held at the centralised fabric so this isolates the node-size effect. 2r &mdash; a bigger domain pools HBM bandwidth, lowers the sequential-decode rollout floor, and raises the compute a full stock can burn ~linearly. 2s &mdash; the same node-size axis crossed with the compute-budget ladder: the node size barely matters below ~1e24 (a handful of GPUs either way) and dominates at frontier scale, where 16-GPU islands cost ~1.6&ndash;2&times; the GPUs of a &ge;32-GPU node. A <b>hollow</b> bar marks a run that misses 180&nbsp;days &mdash; it is drawn at the GPU count that reaches the <i>fastest achievable</i> wall-clock (the full-stock floor), with that wall-clock in the box, so a missed window still reports what the run would cost and how long it would take.</p>
 {panel(dc_node_maxc)}{panel(dc_node_gpus)}
+<p class="sub"><b>Trainer placement (2t, 2u).</b> A co-located trainer averages gradients over datacentre fabric for free. A distributed one (128-GPU nodes at separate sites, the default) all-reduces them every step over the 1&nbsp;Gbps WAN &mdash; sent and received, and unlike the broadcast never spread over <i>k</i> steps &mdash; so it binds whenever gradients are compressed less than ~2&times; the broadcast's {DC_COMP:g}&times;. At Rahman's 150&times; (4-bit + top-k with error feedback; Covenant-72B ran 146&times;) it sits below the broadcast and the two placements coincide; at {DC_COMP:g}&times; it halves the ceiling. The MoE ({MODELS[MOE_MODEL].name}) sits an order of magnitude lower either way: both WAN transfers scale with its total parameters, its step compute with its active ones.</p>
+{panel(trainer_dense)}{panel(trainer_moe)}
 
 <h2>3 &middot; Response-length campaign (measured E[R])</h2>
 <p class="sub">Feeds the runtime model's per-(model,task) E[R]. Agentic effective-context is the multi-turn regime the single-turn model doesn't yet represent.</p>

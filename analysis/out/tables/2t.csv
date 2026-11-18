@@ -1,0 +1,6 @@
+GPU stock,Co-located trainer,"Distributed, 150x gradients","Distributed, 16x gradients"
+128,2.81e+23,2.81e+23,2.81e+23
+1024,2.24e+24,2.24e+24,2.24e+24
+10000,2.35e+25,2.35e+25,2.35e+25
+100000,2.38e+26,2.38e+26,1.30e+26
+1000000,2.61e+26,2.61e+26,1.30e+26

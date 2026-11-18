@@ -9,6 +9,7 @@
 
 | Path | Role |
 |---|---|
+| `penalties.py` | Rahman's distributed-training penalties (straggler tails, goodput, η factors), ported verbatim; toggled by `PenaltySpec` |
 | `MODEL_CALCULATIONS.md` | Every equation the code computes, with notation and code identifiers (report Appendix B) |
 | `specs.py` | Dataclasses: `ModelSpec`, `RLSpec`, `AlgoSpec`, `HWSpec`, `NetSpec`, `VerifySpec`, `Scenario` |
 | `model.py` | Analytic core: `training_compute`, `training_time`, `training_memory`, `rollout_terms`, `verify_time`, `broadcast_time`, `n_steps`, `simulate` |
@@ -74,12 +75,12 @@
 | # | Gap | Consequence |
 |---|---|---|
 | A-i | Single-turn only | Multi-turn agentic effective context (measured ~2k–123k median across four environments) not represented |
-| A-ii | `penalty_para = 1.0` | Trainer optimistic at high FSDP shard degree — the residual in the AReaL 14B/32B rows |
+| A-ii | `penalty_para = 1.0`; no intra-group FSDP communication | Trainer optimistic at high FSDP shard degree — the residual in the AReaL 14B/32B rows. Rahman's penalties (`PenaltySpec`) do **not** close it: they charge sync *between* replicas and pipeline handoffs, not FSDP traffic *within* one shard group |
 | A-iii | No Rahman η / DiLoCo outer loop | `sync_interval` k ≥ 2 amortises the broadcast over k steps (per-step cost ÷ k), but its convergence cost is not charged (see A-vi), so large k reads as a free win. At the default k = 1 weights are broadcast every step |
 | A-iv | Inference limited to ONE serving group | A group is `inf_tp` tensor-parallel nodes (`inf_tp_max=1` ⇒ a single node). TP collectives (per-layer AllReduce; AllToAll once KV shards past `n_kv_heads`) are **not** charged — `inf_tp_max` stands in for what the fabric sustains |
-| A-v | No inter-learner communication term | Multiple trainer nodes are data-parallel replicas with no sync cost (`penalty_para = 1.0`); assumes a co-located learner. Would not hold for WAN-separated learner sites |
+| A-v | Trainer all-reduce is a plain ring over one link | With `train_distributed` (default) the 128-GPU trainer nodes sit at separate sites and all-reduce gradients every step (H = 1) over the WAN at `grad_compression` (150x, Rahman): 87 s at 1 Gbps, below the broadcast; it would bind below ~32x (810 s at 16x). No hierarchical/topology-aware reduction, gradient sparsity beyond `compression`, or overlap with backward beyond `max(T_comp, T_sync)`. Under-cap (16-GPU, pipelined) trainers are representable but not admitted by the solver |
 | A-vi | Staleness quality penalty is a diagnostic | `policy_age` reports the configured `k`; its sample-efficiency cost is not wired into `N_steps` (would create a fixed point) |
-| A-vii | Stage times use the MEAN response length; heterogeneous hardware only via lumped `capacity_mult` | Assumes continuous batching keeps every slot full across step boundaries. In the single-wave regime (the decentralised ceiling) the last sequence to finish is near `R_max`, not `R`, so the rollout floor is optimistic by up to `R_max/R` (2x at the defaults). Straggler/tail penalty designed, not coded |
+| A-vii | Stage times use the MEAN response length; heterogeneous hardware only via lumped `capacity_mult` | Assumes continuous batching keeps every slot full across step boundaries. In the single-wave regime (the decentralised ceiling) the last sequence to finish is near `R_max`, not `R`, so the rollout floor is optimistic by up to `R_max/R` (2x at the defaults). Hardware fail-slow tails are coded (`PenaltySpec.inf_mode`, async by default); the response-length tail is not |
 | A-viii | Facility power factor is a **flat constant** | `FACILITY_PUE = 1.6` multiplies board TDP in `node_gpus_power_cap`/`sites_power`, so every power figure is draw at the meter. One number stands in for host/network/conversion/cooling across every GPU family and site design |
 | A-ix | `stock_gpus` counts **physical chips** | Not renormalised to H100-equivalents when `gpu` changes, so cross-family sweeps compare fixed chip counts, not fixed compute |
 
