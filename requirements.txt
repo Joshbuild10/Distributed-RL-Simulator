@@ -1,0 +1,5 @@
+# The model core (specs, model, penalties, feasibility*) is stdlib-only.
+# These are for analysis/ (figures, dashboard, explorer).
+pandas>=2.2
+matplotlib>=3.9
+streamlit>=1.40

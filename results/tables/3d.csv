@@ -1,0 +1,21 @@
+model,domain,mean E[R],censored,cap,status
+V4-flash,math,"12,312",2%,"65,536",usable
+V4-flash,code,"22,553",6%,"65,536",usable
+V4-flash,logic,"4,097",0%,"65,536",usable
+V4-flash,science,"5,361",0%,"131,072",usable
+V4-pro,math,"11,553",0%,"65,536",usable
+V4-pro,code,"39,180",10%,"131,072",lower bound
+V4-pro,logic,"4,338",0%,"131,072",usable
+V4-pro,science,"8,163",0%,"131,072",usable
+GLM-4.5-Air,math,"17,016",1%,"49,152",usable
+GLM-4.5-Air,code,"22,961",1%,"49,152",usable
+8B,math,"15,359",0%,"65,536",usable
+8B,code,"16,417",0%,"65,536",usable
+14B,math,"15,270",0%,"65,536",usable
+14B,code,"17,272",0%,"65,536",usable
+30B-A3B,math,"16,574",0%,"65,536",usable
+30B-A3B,code,"17,232",0%,"65,536",usable
+32B*,math,"33,693",38%,"65,536",lower bound
+32B*,code,"37,555",42%,"65,536",lower bound
+235B-A22B,math,"14,275",0%,"65,536",usable
+235B-A22B,code,"16,294",0%,"65,536",usable

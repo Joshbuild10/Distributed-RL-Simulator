@@ -1,0 +1,13 @@
+model,domain,value,fallback,note
+V4-flash,math,12312.4453125,,
+V4-flash,code,22552.984375,,
+V4-flash,logic,4096.5703125,,
+V4-flash,science,5360.7421875,,
+V4-pro,math,11552.859375,,
+V4-pro,code,39180.15625,,
+V4-pro,logic,4338.4453125,,
+V4-pro,science,8162.66796875,,
+GLM-4.5-Air,math,17016.296875,,
+GLM-4.5-Air,code,22960.79296875,,
+GLM-4.5-Air,logic,,,n/a
+GLM-4.5-Air,science,,,n/a

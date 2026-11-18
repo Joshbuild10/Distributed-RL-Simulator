@@ -365,7 +365,7 @@ pre-training compute buys back the loss, which has no RL analogue. Both are 1 at
 `η` is carried on every result (`evaluate`, the max-compute point) but **never sizes anything**:
 quality-adjusted compute, `C_RL * η`, is a separate presentation. Because the broadcast tail grows with
 the inference node count the solver picks, the solver now also checks that the composed step fits its
-budget. Toggle: `FeasConfig.penalty`, `feasibility.py --penalties`, `PENALTIES=on` for the dashboard.
+budget. Toggle: `FeasConfig.penalty`, `feasibility.py --penalties`, `python -m analysis --penalties` for the figures.
 
 ### What this means at the threat-model operating point
 
@@ -389,7 +389,7 @@ takes over if gradients are compressed less than ~32x (810 s at 16x, halving the
 
 ### Headline numbers at these inputs
 
-Reproduced from the code on 2026-11-10 (`python results/plot_dashboard.py`, `python feasibility.py`).
+Reproduced from the code on 2026-11-10 (`python -m analysis`, `python feasibility.py`).
 Per-target rows use the budget-scaled batch (256 → 65,536); the by-stock rows use the flat 65,536.
 
 Minimum GPUs to finish (decentralised), as `total GPUs (trainer GPUs)`; `X` = misses the window:

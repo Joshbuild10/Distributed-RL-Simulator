@@ -2,7 +2,7 @@
 """
 feasibility_core.py -- Config, solver and formatting primitives for the distributed-RL
 feasibility study. NO printing lives here; the sweeps/tables/CSVs are in feasibility.py, and
-results/plot_dashboard.py imports this module for the same numbers.
+the analysis/ package imports this module for the same numbers.
 
 The question: for an RL run of a given COMPUTE SCALE (anchored to known models or to FLOP
 thresholds), what is the minimum cluster -- node count + trainer:inference split -- that finishes
@@ -741,7 +741,7 @@ def steps_and_c_rl(op, window_s):
 
 
 # ---------------------------------------------------------------------------
-# Formatting (shared by feasibility.py tables and results/plot_dashboard.py)
+# Formatting (shared by feasibility.py tables and the analysis/ tables)
 # ---------------------------------------------------------------------------
 def fmt_time(s):
     """Single shared time formatter -- every table, CSV and the dashboard (as `_ft`) route through

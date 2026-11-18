@@ -1,0 +1,21 @@
+target,C_RL,batch,window,feasible,GPUs,% stock,tr:inf,steps,wall,cost,bottleneck,T_step,T_update,T_rollout,T_bcast
+DeepSeek-R1-Zero,2.0e+22,256,30 d,yes,96,0.01%,50:50,753,22 d,$101.0k,rollout+verify,42 min,17 min,42 min,7 min
+DeepSeek-R1-Zero,2.0e+22,256,90 d,yes,64,0.00%,75:25,753,66 d,$202.0k,rollout+verify,2.1 h,17 min,2.1 h,7 min
+DeepSeek-R1-Zero,2.0e+22,256,180 d,yes,64,0.00%,75:25,753,66 d,$202.0k,rollout+verify,2.1 h,17 min,2.1 h,7 min
+DeepSeek-R1-Zero,2.0e+22,256,720 d,yes,64,0.00%,75:25,753,66 d,$202.0k,rollout+verify,2.1 h,17 min,2.1 h,7 min
+o1,1.0e+23,1.0k,30 d,yes,272,0.02%,29:71,941,27 d,$357.8k,rollout+verify,42 min,41 min,42 min,7 min
+o1,1.0e+23,1.0k,90 d,yes,112,0.01%,43:57,941,82 d,$442.0k,rollout+verify,2.1 h,1.1 h,2.1 h,7 min
+o1,1.0e+23,1.0k,180 d,yes,80,0.01%,60:40,941,161 d,$616.7k,rollout+verify,4.1 h,1.1 h,4.1 h,7 min
+o1,1.0e+23,1.0k,720 d,yes,64,0.00%,75:25,941,321 d,$986.7k,rollout+verify,8.2 h,1.1 h,8.2 h,7 min
+o3,1.0e+24,4.1k,30 d,yes,"3,008",0.20%,26:74,2.4k,28 d,$4.0M,update,17 min,17 min,14 min,7 min
+o3,1.0e+24,4.1k,90 d,yes,896,0.06%,29:71,2.4k,84 d,$3.6M,update,51 min,51 min,49 min,7 min
+o3,1.0e+24,4.1k,180 d,yes,432,0.03%,30:70,2.4k,172 d,$3.6M,rollout+verify,1.7 h,1.7 h,1.7 h,7 min
+o3,1.0e+24,4.1k,720 d,yes,128,0.01%,38:62,2.4k,1.8 yr,$3.9M,rollout+verify,6.6 h,4.6 h,6.6 h,7 min
+Grok-3-Reasoning,2.5e+25,16.4k,30 d,NO*,"31,696*",2.11%,25:75,14.7k,69 d,-,rollout+verify,7 min,7 min,7 min,7 min
+Grok-3-Reasoning,2.5e+25,16.4k,90 d,yes,"23,904",1.59%,25:75,14.7k,89 d,$102.6M,update,9 min,9 min,7 min,7 min
+Grok-3-Reasoning,2.5e+25,16.4k,180 d,yes,"12,016",0.80%,26:74,14.7k,175 d,$101.0M,update,17 min,17 min,14 min,7 min
+Grok-3-Reasoning,2.5e+25,16.4k,720 d,yes,"2,560",0.17%,30:70,14.7k,2.0 yr,$88.1M,rollout+verify,1.2 h,1.1 h,1.2 h,7 min
+Grok-4,2.5e+26,65.5k,30 d,NO*,"134,304*",8.95%,23:77,36.8k,173 d,-,rollout+verify,7 min,7 min,7 min,7 min
+Grok-4,2.5e+26,65.5k,90 d,NO*,"134,304*",8.95%,23:77,36.8k,173 d,-,rollout+verify,7 min,7 min,7 min,7 min
+Grok-4,2.5e+26,65.5k,180 d,yes,"105,152",7.01%,28:72,36.8k,180 d,$908.5M,rollout+verify,7 min,7 min,7 min,7 min
+Grok-4,2.5e+26,65.5k,720 d,yes,"25,440",1.70%,30:70,36.8k,2.0 yr,$878.3M,rollout+verify,28 min,28 min,28 min,7 min

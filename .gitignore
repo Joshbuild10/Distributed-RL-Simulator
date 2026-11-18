@@ -5,6 +5,8 @@ output.txt
 model_output.txt
 experiments/
 *.txt
+!requirements.txt
+!analysis/fonts/OFL.txt
 data/
 results/poster*
 *step_anatomy.py

@@ -1,120 +1,277 @@
 """
-render.py -- Draw a Fig with matplotlib in one house style. The same Axes become the paper's vector
-PDF/SVG and the dashboard's inline SVG, so there is one renderer to maintain.
+render.py -- Draw any Fig with matplotlib in the house style (theme.py). One renderer makes the
+paper's PDF/SVG/PNG, the dashboard's inline SVG and the explorer's images.
+
+Everything happens inside the theme's rc context, including saving: matplotlib reads font embedding
+and face colours at save time, not draw time.
 """
 import io
 import math
+import numbers
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch, Rectangle
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
-# Okabe-Ito: colourblind-safe and distinct in greyscale print
-PALETTE = ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#000000"]
-FULL_WIDTH_IN = 6.9                          # two-column page width; single column is ~3.35
-STYLE = {
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-    "font.size": 8, "axes.titlesize": 9, "axes.labelsize": 8, "xtick.labelsize": 7, "ytick.labelsize": 7,
-    "legend.fontsize": 7, "axes.spines.top": False, "axes.spines.right": False,
-    "axes.linewidth": 0.6, "xtick.major.width": 0.6, "ytick.major.width": 0.6,
-    "axes.grid": True, "axes.grid.axis": "y", "grid.color": "#e3e3e3", "grid.linewidth": 0.5,
-    "axes.axisbelow": True, "svg.fonttype": "none", "pdf.fonttype": 42,   # real text in SVG/PDF
-}
+from .spec import FORMATS, fmt_count, tex_sci
+from .theme import HEAT, THEMES, rc, series_roles
+
+WIDTH_IN = 6.9                               # two-column page width; ~3.35 for a single column
+LABEL_FS = 5.6                               # value labels on bars
 
 
-def _count(v):
-    for d, u in ((1e6, "M"), (1e3, "k")):
-        if abs(v) >= d:
-            return f"{v/d:.3g}{u}"
-    return f"{v:.0f}"
+def _num(v):
+    # numbers.Real, not (int, float): a NaN-free pandas column holds numpy int64, which is neither
+    return isinstance(v, numbers.Real) and not isinstance(v, bool) and math.isfinite(v)
 
 
-def _sci(v):
-    e = math.floor(math.log10(v))
-    return f"{v/10**e:.1f}e{e}"
+def _log_axis(axis, fmt):
+    axis.set_major_locator(LogLocator(base=10, numticks=12))
+    axis.set_minor_formatter(NullFormatter())
+    if fmt == "sci":
+        axis.set_major_formatter(FuncFormatter(lambda v, _: f"$10^{{{round(math.log10(v))}}}$"
+                                               if v > 0 and abs(math.log10(v) - round(math.log10(v))) < 1e-9 else ""))
+    else:
+        axis.set_major_formatter(FuncFormatter(lambda v, _: FORMATS["rate" if fmt == "rate" else "count"](v)))
 
 
-def _pow10(v, _=None):
-    e = round(math.log10(v))
-    return f"$10^{{{e}}}$" if abs(math.log10(v) - e) < 1e-9 else ""
+def _legend(ax, handles, n):
+    if handles:
+        ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0, 1.0), ncols=min(n, 5),
+                  frameon=False, handlelength=1.1, columnspacing=1.1, borderaxespad=0.2)
 
 
-def draw(fig, title=True, width=FULL_WIDTH_IN, height=2.9):
-    """A matplotlib Figure for `fig`: grouped bars, log y by default, hollow bars for fallbacks."""
-    with plt.rc_context(STYLE):
-        f, ax = plt.subplots(figsize=(width, height), layout="constrained")
-        cats, series = fig.categories(), fig.series_values()
-        n = len(series)
-        w = 0.8 / n
-        label = _sci if fig.value_fmt == "sci" else _count
-        drawn = []
-        for j, s in enumerate(series):
-            col = PALETTE[j % len(PALETTE)]
-            for i, x in enumerate(cats):
-                r = fig.cell(x, s)
-                if r is None:
-                    continue
-                xc = i - 0.4 + w * (j + 0.5)
-                if r["value"] == r["value"] and r["value"] is not None:          # plotted value
-                    ax.bar(xc, r["value"], w * 0.92, color=col, label=fig.series_fmt(s) if i == 0 else None)
-                    ax.annotate(label(r["value"]), (xc, r["value"]), xytext=(0, 1.5), textcoords="offset points",
-                                ha="center", va="bottom", fontsize=5.5, color="#444", rotation=90 if n > 2 else 0)
-                    drawn.append(r["value"])
-                elif r["fallback"] == r["fallback"] and r["fallback"] is not None:   # missed: hollow
-                    ax.bar(xc, r["fallback"], w * 0.92, facecolor="none", edgecolor=col, linewidth=0.8,
-                           linestyle=(0, (2, 1.5)), label=fig.series_fmt(s) if i == 0 else None)
-                    ax.annotate(r["note"], (xc, r["fallback"]), xytext=(0, 1.5), textcoords="offset points",
-                                ha="center", va="bottom", fontsize=5.5, color=col, rotation=90, fontweight="bold")
-                    drawn.append(r["fallback"])
-                else:                                                                # nothing to draw
-                    ax.annotate(r["note"] or "n/a", (xc, 0), xycoords=("data", "axes fraction"),
-                                xytext=(0, 3), textcoords="offset points", ha="center", va="bottom",
-                                fontsize=5.5, color="#888", rotation=90)
-        if fig.log:
-            ax.set_yscale("log")
-            if fig.value_fmt == "sci":
-                ax.yaxis.set_major_formatter(FuncFormatter(_pow10))
+# --- kinds ---------------------------------------------------------------------------------------
+def _bars(fig, ax, t):
+    cats = fig.categories()
+    series = fig.series_values() if fig.series else [None]
+    n = len(series)
+    roles = series_roles(n, fig.ordinal)
+    w = 0.8 / n
+    label = FORMATS[fig.fmt]
+    shown, inner = [], []
+    for j, s in enumerate(series):
+        col = t[roles[j]]
+        for i, x in enumerate(cats):
+            r = fig.cell(x, s) if s is not None else fig.data[fig.data[fig.x] == x].iloc[0]
+            xc = i - 0.4 + w * (j + 0.5)
+            if r is None:
+                continue
+            if _num(r["value"]):
+                v = r["value"]
+                bar = ax.bar(xc, v, w * 0.9, color=col, zorder=2)[0]
+                if not fig.refs:                     # reference lines carry the scale; labels would cross them
+                    ax.annotate(label(v), (xc, v), xytext=(0, 1.5), textcoords="offset points", ha="center",
+                                va="bottom", fontsize=LABEL_FS, color=t["muted"], rotation=90 if n > 2 else 0)
+                shown.append(v)
+                txt = r.get(fig.inner) if fig.inner else None
+                if isinstance(txt, str) and txt:
+                    inner.append((xc, v, txt, bar))
+            elif _num(r["fallback"]):
+                fb = r["fallback"]
+                ax.bar(xc, fb, w * 0.9, facecolor="none", edgecolor=col, linewidth=0.8,
+                       linestyle=(0, (2, 1.5)), zorder=2)
+                ax.annotate(r["note"], (xc, fb), xytext=(0, 1.5), textcoords="offset points", ha="center",
+                            va="bottom", fontsize=LABEL_FS, color=col, rotation=90, fontweight="bold")
+                shown.append(fb)
             else:
-                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: _count(v)))
-            ax.yaxis.set_minor_formatter(NullFormatter())
-            ax.yaxis.set_major_locator(LogLocator(base=10, numticks=12))
-        refs = [(lab, y) for lab, y in fig.refs]
-        if drawn:
-            lo, hi = min(drawn + [y for _, y in refs]), max(drawn + [y for _, y in refs])
-            ax.set_ylim(lo / 2.5 if fig.log else 0, hi * (6 if fig.log else 1.2))
-        for lab, y in refs:
-            ax.axhline(y, color="#555", linewidth=0.6, linestyle=(0, (4, 2)), zorder=0.5)
-            ax.annotate(lab, (1.0, y), xycoords=("axes fraction", "data"), xytext=(3, 0),
-                        textcoords="offset points", va="center", fontsize=6, color="#555")
-        ax.set_xticks(range(len(cats)), [fig.x_fmt(x) for x in cats])
-        ax.set_xlim(-0.55, len(cats) - 0.45)
-        ax.set_ylabel(fig.ylabel)
-        if fig.xlabel:
-            ax.set_xlabel(fig.xlabel)
-        ax.grid(axis="x", visible=False)
-        # Legend in its own band above the axes, so it can never sit on a tall bar's label
-        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncols=min(n, 4), frameon=False,
-                  handlelength=1.2, columnspacing=1.2, borderaxespad=0.2)
-        if title:
-            f.suptitle(f"{fig.id}. {fig.title}", x=0.01, ha="left", fontweight="bold", fontsize=9)
-        return f
+                ax.annotate(r["note"] or "n/a", (xc, 0), xycoords=("data", "axes fraction"), xytext=(0, 3),
+                            textcoords="offset points", ha="center", va="bottom", fontsize=LABEL_FS,
+                            color=t["muted"], rotation=90)
+    refs = list(fig.refs)
+    span = shown + [y for _, y in refs]
+    if fig.log:
+        ax.set_yscale("log")
+        _log_axis(ax.yaxis, fig.fmt)
+        if span:
+            ax.set_ylim(min(span) / 2.5, max(span) * (8 if n > 2 else 4))
+    else:
+        ax.set_ylim(0, max(span) * 1.2 if span else 1)
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: label(v) if v else "0"))
+    lo = ax.get_ylim()[0]
+    for xc, v, txt, bar in inner:                 # text inside each bar, clipped to it
+        mid = math.sqrt(lo * v) if fig.log else v / 2
+        ax.text(xc, mid, txt, rotation=90, ha="center", va="center", fontsize=5.2,
+                color=t["bg"], zorder=3).set_clip_path(bar)
+    for lab, y in refs:
+        ax.axhline(y, color=t["muted"], linewidth=0.6, linestyle=(0, (4, 2)), zorder=1)
+        ax.annotate(f"{lab}\n{tex_sci(y)}", (1.0, y), xycoords=("axes fraction", "data"), xytext=(4, 0),
+                    textcoords="offset points", va="center", fontsize=5.8, color=t["muted"], linespacing=0.95)
+    ax.set_xticks(range(len(cats)), [fig.x_fmt(x) for x in cats])
+    ax.set_xlim(-0.55, len(cats) - 0.45)
+    ax.grid(axis="x", visible=False)
+    ax.set_ylabel(fig.ylabel)
+    if fig.xlabel:
+        ax.set_xlabel(fig.xlabel)
+    if fig.series:
+        _legend(ax, [Patch(color=t[roles[j]], label=fig.series_fmt(s)) for j, s in enumerate(series)], n)
 
 
-def save(fig, stem, **kw):
-    """Write stem.pdf / .svg / .png (paper versions: no title, it lives in the caption)."""
-    f = draw(fig, title=False, **kw)
-    for ext in ("pdf", "svg"):
-        f.savefig(f"{stem}.{ext}")
-    f.savefig(f"{stem}.png", dpi=300)
-    plt.close(f)
+def _heatmap(fig, ax, t):
+    rows, cols = fig.series_values(), fig.categories()
+    ok = [r["value"] for _, r in fig.data.iterrows() if r["status"] == "ok" and _num(r["value"]) and r["value"] > 0]
+    lo, hi = (math.log10(min(ok)), math.log10(max(ok))) if ok else (0, 1)
+    fills = {"infeas": "infeas", "nofit": "nofit", "over": "over", "under": "under"}
+    for i, rw in enumerate(rows):
+        for j, c in enumerate(cols):
+            r = fig.cell(c, rw)
+            if r is None:
+                continue
+            if r["status"] == "ok" and _num(r["value"]) and r["value"] > 0:
+                k = 0 if hi <= lo else round((math.log10(r["value"]) - lo) / (hi - lo) * (len(HEAT) - 1))
+                fill, txt = HEAT[k], ("fg" if k < 3 else "bg")
+            else:
+                fill = fills.get(r["status"], "nofit")
+                txt = "bg" if r["status"] in ("over", "under") else "fg"
+            ax.add_patch(Rectangle((j, i), 0.96, 0.92, color=t[fill], linewidth=0))
+            ax.text(j + 0.48, i + 0.46, r["text"], ha="center", va="center", fontsize=6.5, color=t[txt])
+    ax.set_xlim(0, len(cols))
+    ax.set_ylim(len(rows), 0)
+    ax.set_xticks([j + 0.48 for j in range(len(cols))], [fig.x_fmt(c) for c in cols])
+    ax.set_yticks([i + 0.46 for i in range(len(rows))], [fig.series_fmt(r) for r in rows])
+    ax.xaxis.tick_top()
+    ax.xaxis.set_label_position("top")
+    ax.tick_params(length=0)
+    ax.grid(False)
+    for s in ax.spines.values():
+        s.set_visible(False)
+    ax.set_xlabel(fig.xlabel)
+    ax.set_ylabel(fig.ylabel)
 
 
-def svg(fig, **kw):
-    """Inline SVG string (dashboard version: with title)."""
-    f = draw(fig, title=True, **kw)
-    buf = io.StringIO()
-    f.savefig(buf, format="svg")
-    plt.close(f)
-    return buf.getvalue()[buf.getvalue().index("<svg"):]
+def _tornado(fig, ax, t):
+    levers = fig.categories()
+    finite = [v for k in ("lo", "hi") for v in fig.data[k] if _num(v)]
+    cap = max(2.0, max(finite) * 1.6)            # where a lever that breaks the run is drawn
+    for i, lv in enumerate(levers):
+        r = fig.data[fig.data[fig.x] == lv].iloc[0]
+        if all(_num(r[k]) and abs(r[k] - 1) < 0.005 for k in ("lo", "hi")):
+            ax.annotate("no effect", (1, i), xytext=(4, 0), textcoords="offset points", va="center",
+                        fontsize=LABEL_FS, color=t["muted"], fontstyle="italic")
+            continue
+        for key, role, dy in (("lo", "s1", -0.18), ("hi", "s2", 0.18)):
+            v = r[key]
+            vv = min(v, cap) if _num(v) else cap
+            ax.barh(i + dy, vv - 1, left=1, height=0.34, color=t[role], zorder=2)
+            if _num(v) and abs(v - 1) < 0.005:
+                continue                             # unchanged: no bar, no label
+            txt = f"{v:.2f}x" if _num(v) and v < cap else "breaks (no-fit)"
+            ax.annotate(txt, (vv, i + dy), xytext=(3 if vv >= 1 else -3, 0), textcoords="offset points",
+                        ha="left" if vv >= 1 else "right", va="center", fontsize=LABEL_FS, color=t["muted"])
+    ax.axvline(1, color=t["fg"], linewidth=0.7)
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5), numticks=12))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}x"))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlim(min(finite + [1]) / 1.3, cap * 1.5)
+    ax.set_yticks(range(len(levers)), levers)
+    ax.set_ylim(len(levers) - 0.5, -0.5)
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", visible=True)
+    ax.set_xlabel(fig.xlabel)
+    _legend(ax, [Patch(color=t["s1"], label=fig.labels[0]), Patch(color=t["s2"], label=fig.labels[1])], 2)
+
+
+def _hbars(fig, ax, t):
+    rows = fig.categories()
+    for i, x in enumerate(rows):
+        r = fig.data[fig.data[fig.x] == x].iloc[0]
+        v = r["value"]
+        ax.barh(i, v, height=0.6, color=t["s2"] if v > 0 else t["s1"], zorder=2)
+        if _num(r.get("lo")) and _num(r.get("hi")):
+            ax.plot([r["lo"], r["hi"]], [i, i], color=t["fg"], linewidth=0.8, zorder=3)
+            ax.plot([r["lo"]] * 2 + [None] + [r["hi"]] * 2, [i - .15, i + .15, None, i - .15, i + .15],
+                    color=t["fg"], linewidth=0.8, zorder=3)
+        ax.annotate(FORMATS[fig.fmt](v), (1.0, i), xycoords=("axes fraction", "data"), xytext=(6, 0),
+                    textcoords="offset points", ha="left", va="center", fontsize=6.5, color=t["fg"],
+                    fontweight="semibold")
+    ax.axvline(0, color=t["fg"], linewidth=0.7)
+    ax.set_yticks(range(len(rows)), [fig.x_fmt(x) for x in rows])
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:+.0f}%" if v else "0"))
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", visible=True)
+    ax.set_xlabel(fig.xlabel)
+
+
+def _multiples(fig, axes, t, f):
+    items = fig.categories()
+    axes = list(axes) if len(items) > 1 else [axes]
+    roles = ("s1", "s2")
+    label = FORMATS[fig.fmt]
+    for k, (ax, it) in enumerate(zip(axes, items)):
+        r = fig.data[fig.data[fig.x] == it].iloc[0]
+        vals = [r["predicted"], r["published"]]
+        top = max([v for v in vals if _num(v)] + [r["hi"] if _num(r.get("hi")) else 0] + [1e-9])
+        whisker = r["hi"] if _num(r.get("hi")) else None
+        for b, (v, role) in enumerate(zip(vals, roles)):
+            if _num(v):
+                ax.bar(b, v, 0.72, color=t[role], zorder=2)
+                ax.annotate(label(v), (b, max(v, whisker) if b == 0 and whisker else v), xytext=(0, 1.5), textcoords="offset points", ha="center",
+                            va="bottom", fontsize=5.2, color=t["muted"], rotation=90)
+            else:
+                ax.annotate("n/a", (b, 0), xytext=(0, 3), textcoords="offset points", ha="center",
+                            fontsize=LABEL_FS, color=t["muted"])
+        if _num(r.get("lo")) and _num(r.get("hi")):
+            ax.plot([0, 0], [r["lo"], r["hi"]], color=t["fg"], linewidth=0.8, zorder=3)
+            ax.plot([-.12, .12, None, -.12, .12], [r["lo"], r["lo"], None, r["hi"], r["hi"]],
+                    color=t["fg"], linewidth=0.8, zorder=3)
+        ax.set_ylim(0, top * 1.32)
+        ax.set_xlim(-0.6, 1.6)
+        ax.set_xticks([])
+        ax.set_title(fig.x_fmt(it), fontsize=7, fontweight="semibold", color=t["fg"])
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: label(v) if v else "0"))
+        ax.tick_params(axis="y", labelsize=6)
+        if k == 0:
+            ax.set_ylabel(fig.ylabel)
+    f.legend(handles=[Patch(color=t[roles[0]], label=fig.labels[0]), Patch(color=t[roles[1]], label=fig.labels[1])],
+             loc="outside upper left", ncols=2, frameon=False, handlelength=1.1)
+
+
+_KINDS = {"bars": _bars, "heatmap": _heatmap, "tornado": _tornado, "hbars": _hbars}
+
+
+def _height(fig):
+    if fig.height:
+        return fig.height
+    n = len(fig.categories())
+    if fig.kind == "heatmap":
+        return 0.28 * len(fig.series_values()) + 1.25
+    if fig.kind in ("tornado", "hbars"):
+        return 0.27 * n + 0.95
+    return 2.35 if fig.kind == "multiples" else 2.9
+
+
+def _draw(fig, theme, title, width):
+    t = THEMES[theme]
+    if fig.kind == "multiples":
+        f, axes = plt.subplots(1, len(fig.categories()), figsize=(width, _height(fig)), layout="constrained")
+        _multiples(fig, axes, t, f)
+    else:
+        f, ax = plt.subplots(figsize=(width, _height(fig)), layout="constrained")
+        _KINDS[fig.kind](fig, ax, t)
+    if title:
+        f.suptitle(f"{fig.id}. {fig.title}", x=0.005, ha="left", fontweight="bold", fontsize=9.5, color=t["fg"])
+    return f
+
+
+def render(fig, fmt="svg", theme="light", title=True, width=WIDTH_IN, dpi=300):
+    """One figure as bytes in `fmt` (svg | pdf | png)."""
+    with plt.rc_context(rc(theme)):
+        f = _draw(fig, theme, title, width)
+        buf = io.BytesIO()
+        f.savefig(buf, format=fmt, dpi=dpi)
+        plt.close(f)
+    return buf.getvalue()
+
+
+def save(fig, stem, theme="light", width=WIDTH_IN):
+    """stem.pdf / .svg / .png for the paper: no title (it belongs in the caption), drawn once."""
+    with plt.rc_context(rc(theme)):
+        f = _draw(fig, theme, False, width)
+        for ext in ("pdf", "svg"):
+            f.savefig(f"{stem}.{ext}")
+        f.savefig(f"{stem}.png", dpi=300)
+        plt.close(f)

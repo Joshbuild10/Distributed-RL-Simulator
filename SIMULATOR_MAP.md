@@ -19,8 +19,10 @@
 | `validation/validate.py` | Entry point: report every scenario + inverse-calibration summary |
 | `feasibility_core.py` | `FeasConfig`, `evaluate`, `min_gpus_for_tsb`, `min_cluster`, `optimal_split`, model/GPU/target registries, formatters |
 | `feasibility.py` | Sweeps, tables, CSV writers, CLI |
-| `results/plot_dashboard.py` | The whole `results/dashboard.html` figure set (inline SVG, no matplotlib) |
-| `experiments/` | Measurement campaign, `svgkit.py` chart primitives, `lengths_io.py` (gitignored for now) |
+| `analysis/` | Every figure and table: `scenarios` (threat model + variants) -> `sweep` (cached evaluations -> DataFrames) -> `figures/` (one module per section) -> `render` (matplotlib, ERA theme) -> paper exports, `results/dashboard.html`, and the Streamlit explorer. `python -m analysis [build\|explore\|list]` |
+| `results/` | Build outputs: `dashboard.html`, `figures/` (PDF/SVG/PNG), `tables/` (CSV); `lengths/` (measured response-length summaries the figures read) |
+| `lengths_io.py`, `svgkit.py` | Length-file reader (used by `analysis`); legacy SVG primitives (now only the gitignored experiment plots) |
+| `experiments/` | Measurement campaign, invariant gate `check_invariants.py` (gitignored for now) |
 
 ## Spec → implementation
 

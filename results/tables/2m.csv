@@ -1,0 +1,6 @@
+target,predicted,published
+DeepSeek-R1-Zero,32,32
+o1,32,32
+o3,112,80
+Grok-3-Reasoning,2528,1696
+Grok-4,24384,15984
