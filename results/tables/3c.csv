@@ -1,0 +1,13 @@
+env,part,value,fallback,note
+tau2 (tool),effective context,2044.0583333333334,,
+tau2 (tool),generated,1205.475,,
+tau2 (tool),tool output,107.7,,
+SWE-smith,effective context,37017.76666666667,,
+SWE-smith,generated,,,
+SWE-smith,tool output,,,
+SWE-rebench,effective context,54307.525,,
+SWE-rebench,generated,19277.383333333335,,
+SWE-rebench,tool output,31382.1,,
+CC-Bench,effective context,203916.49,,
+CC-Bench,generated,,,
+CC-Bench,tool output,,,

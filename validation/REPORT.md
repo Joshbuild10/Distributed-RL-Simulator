@@ -1,9 +1,12 @@
 # Validation report — predicted vs published
 
-> **DRAFT — deterministic table auto-assembled 2026-08-17; Monte-Carlo section added 2026-08-25.**
-> Intended to be redrafted by hand. Every number below is reproducible with
-> `python -m validation.validate`; scenario configs (and their `published=` fields, sourced from
-> the papers cited under *Sources*) are in `validation/presets.py`; the Monte-Carlo priors are in
+> The numbers live in the generated figures and tables, not here: **1a** (step time, predicted vs
+> published, with the 90 % interval), **1b** (error), **1c** (implied trainer MFU) and **A4** (the
+> Monte-Carlo intervals) -- `results/dashboard.html`, `results/tables/{1a,1b,1c,A4}.csv`, or
+> `python -m analysis show validation_step validation_error implied_mfu table_monte_carlo`.
+> `python -m validation.validate` prints the full per-scenario breakdown. This file is the reading
+> of those numbers; figures quoted in the prose are as of 2026-11-18. Scenario configs (with their
+> `published=` fields, sourced below) are in `validation/presets.py`; the priors in
 > `validation/uncertainty.py`.
 
 ## Sources (the published numbers each anchor is scored against)
@@ -26,20 +29,9 @@ cleanly (binary / verification wall), so this report cites them rather than re-d
 
 ## Headline
 
-Point predictions now use each run's **data-grounded per-config trainer MFU** (the calibrated
-mode, not a flat 0.40 — see the Monte-Carlo section and `presets.py`), so the deterministic error
-already reflects realistic efficiency:
-
-| run | model | bound by | model step | published | err |
-|---|---|---|---|---|---|
-| prime-rl reference | R1-Distill-Qwen-32B, 24×H200 (MFU 0.38) | update | 1,377 s | 1,374 s | **+0%** |
-| AReaL-7B | R1-Distill-Qwen-7B, 24 H800 nodes (MFU 0.34) | update | 367 s | 366 s | **+0%** |
-| INTELLECT-2 (short) | QwQ-32B, decentralised swarm | broadcast | 881 s | 1,320 s | −33% |
-| INTELLECT-2 (long) | QwQ-32B, decentralised swarm | broadcast | 881 s | 1,260 s | −30% |
-| AReaL-1.5B | R1-Distill-Qwen-1.5B, 16 nodes (MFU 0.31) | update | 149 s | 213 s | −30% |
-| INTELLECT-3 | GLM-4.5-Air MoE, 512×H200 (MFU 0.17) | update | 1,048 s | 1,500 s | −30% |
-| AReaL-14B | R1-Distill-Qwen-14B, 32 nodes (MFU 0.32) | update | 614 s | 986 s | −38% |
-| AReaL-32B | R1-Distill-Qwen-32B, 48 nodes (MFU 0.28) | update | 758 s | 1,866 s | −59% |
+Point predictions use each run's **data-grounded per-config trainer MFU** (the calibrated mode, not
+a flat 0.40 -- see the Monte-Carlo section and `presets.py`), so the deterministic error (chart 1b)
+already reflects realistic efficiency. prime-rl and AReaL-7B land at +0 %; the rest under-predict.
 
 The residual now shrinks to **≤38 % for every run except AReaL-32B** (−59 %) and the swarm-bound
 INTELLECT-2 — because realistic MFU absorbs most of what used to look like model error. What
@@ -50,7 +42,7 @@ Secondary metrics where published: prime-rl trainer **11,261 vs 11,300 tok/s (�
 runtime **61.2 h vs 64 h (−4%)**; INTELLECT-2 broadcast volume **65.0 vs 62.0 GB (+5%)**
 (difference = embeddings, excluded from theirs).
 
-## Reading this table
+## Reading the residuals
 
 **prime-rl is the only fully-pinned anchor and it matches.** Single-turn math (so the model's
 single-turn assumption is exactly valid), and step time, trainer throughput, inference
@@ -169,16 +161,9 @@ verdict.)
 
 ### Results (n = 8,000, per-config trainer prior)
 
-| anchor | published | bound by | 90 % interval | explained by uncertainty? |
-|---|---|---|---|---|
-| prime-rl | 1,374 s | update | 1,377–1,377 (point) | **yes** — exact (both MFU and E[R] pinned) |
-| AReaL-7B | 366 s | update | 254–582 | **yes** |
-| AReaL-1.5B | 213 s | update | 95–241 | **yes** (small-model MFU) |
-| INTELLECT-3 | 1,500 s | update | 592–1,543 | **yes** (MoE prior is low + wide) |
-| INTELLECT-2 short | 1,320 s | broadcast | 881–881 | **no** — real residual |
-| INTELLECT-2 long | 1,260 s | broadcast | 881–1,094 | **no** — real residual |
-| AReaL-14B | 986 s | update | 405–970 | **no** — real residual |
-| AReaL-32B | 1,866 s | update | 459–1,145 | **no** — real residual |
+Table A4 and the whiskers on chart 1a. Inside the 90 % interval (explained by input uncertainty
+alone): prime-rl (an exact point), AReaL-7B, AReaL-1.5B, INTELLECT-3. Outside (a real residual):
+INTELLECT-2 short/long, AReaL-14B, AReaL-32B.
 
 Reading it: **prime-rl is an exact point match**, not merely "inside an interval" — both its trainer
 MFU and E[R] are pinned to the run's own published numbers, so its "interval" collapses to the

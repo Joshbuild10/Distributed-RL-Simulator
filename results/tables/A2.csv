@@ -1,0 +1,26 @@
+target,C_RL,E[R],feasible,H100s,% stock,tr:inf,steps,wall,cost,bottleneck,T_step,T_update,T_rollout,T_bcast
+DeepSeek-R1-Zero,2.0e+22,1k,yes,64,0.00%,75:25,10k,47 d,$145k,broadcast,7 min,87.4 s,77.1 s,7 min
+DeepSeek-R1-Zero,2.0e+22,10k,yes,64,0.00%,75:25,1.54k,34 d,$105k,rollout+verify,32 min,8 min,32 min,7 min
+DeepSeek-R1-Zero,2.0e+22,50k,yes,64,0.00%,75:25,263,137 d,$421k,rollout+verify,12.5 h,49 min,12.5 h,7 min
+DeepSeek-R1-Zero,2.0e+22,100k,yes,80,0.01%,60:40,107,122 d,$468k,rollout+verify,1 d,2.0 h,1 d,7 min
+DeepSeek-R1-Zero,2.0e+22,500k,no-fit,,,,,,,,,,,
+o1,1.0e+23,1k,yes,64,0.00%,75:25,12.6k,59 d,$182k,broadcast,7 min,6 min,5 min,7 min
+o1,1.0e+23,10k,yes,64,0.00%,75:25,1.93k,166 d,$511k,rollout+verify,2.1 h,34 min,2.1 h,7 min
+o1,1.0e+23,50k,yes,112,0.01%,43:57,329,171 d,$922k,rollout+verify,12.5 h,3.2 h,12.5 h,7 min
+o1,1.0e+23,100k,yes,160,0.01%,30:70,133,174 d,$1.34M,rollout+verify,1 d,8.0 h,1 d,7 min
+o1,1.0e+23,500k,no-fit,,,,,,,,,,,
+o3,1.0e+24,1k,yes,304,0.02%,84:16,31.6k,148 d,$2.16M,broadcast,7 min,4 min,7 min,7 min
+o3,1.0e+24,10k,yes,288,0.02%,44:56,4.82k,170 d,$2.35M,update,51 min,51 min,50 min,7 min
+o3,1.0e+24,50k,yes,736,0.05%,17:83,822,180 d,$6.35M,rollout+verify,5.2 h,4.9 h,5.2 h,7 min
+o3,1.0e+24,100k,yes,"1,248",0.08%,10:90,333,174 d,$10.5M,rollout+verify,12.6 h,12.0 h,12.6 h,7 min
+o3,1.0e+24,500k,no-fit,,,,,,,,,,,
+Grok-3-Reasoning,2.5e+25,1k,NO*,960*,0.06%,80:20,198k,928 d,-,broadcast,7 min,6 min,7 min,7 min
+Grok-3-Reasoning,2.5e+25,10k,yes,"7,456",0.50%,41:59,30.1k,177 d,$63.4M,update,8 min,8 min,7 min,7 min
+Grok-3-Reasoning,2.5e+25,50k,yes,"22,400",1.49%,14:86,5.14k,180 d,$194M,rollout+verify,50 min,49 min,50 min,7 min
+Grok-3-Reasoning,2.5e+25,100k,yes,"35,840",2.39%,9:91,2.08k,173 d,$298M,update,2.0 h,2.0 h,1.7 h,7 min
+Grok-3-Reasoning,2.5e+25,500k,no-fit,,,,,,,,,,,
+Grok-4,2.5e+26,1k,NO*,"3,440*",0.23%,78:22,495k,6 y,-,broadcast,7 min,7 min,7 min,7 min
+Grok-4,2.5e+26,10k,NO*,"43,184*",2.88%,36:64,75.3k,354 d,-,rollout+verify,7 min,7 min,7 min,7 min
+Grok-4,2.5e+26,50k,yes,"204,464",13.63%,15:85,12.8k,180 d,$1.77e+03M,update,20 min,20 min,18 min,7 min
+Grok-4,2.5e+26,100k,yes,"422,912",28.19%,7:93,5.21k,179 d,$3.64e+03M,update,50 min,50 min,34 min,7 min
+Grok-4,2.5e+26,500k,no-fit,,,,,,,,,,,

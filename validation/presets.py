@@ -5,16 +5,13 @@ presets.py -- Hardware/model constants and the published scenarios
 
 from dataclasses import replace
 
+from feasibility.hardware import GB, TB, node_hw
 from specs import ModelSpec, RLSpec, AlgoSpec, HWSpec, NetSpec, VerifySpec, Scenario
 
-GB = 1e9
-TB = 1e12
-
-# --- hardware constants (dense bf16 peak, no sparsity) ---
-H100_NODE = dict(node_flops=8 * 989e12, node_hbm=8 * 80 * GB, node_bw=8 * 3.35 * TB)
-H200_NODE = dict(node_flops=8 * 989e12, node_hbm=8 * 141 * GB, node_bw=8 * 4.8 * TB)
-# H800 = H100 compute (989 TF bf16) + HBM (80 GB @ 3.35 TB/s); only interconnect is cut.
-H800_NODE = dict(node_flops=8 * 989e12, node_hbm=8 * 80 * GB, node_bw=8 * 3.35 * TB)
+# --- hardware: 8-GPU nodes from the shared GPU registry (dense bf16 peak, no sparsity) ---
+H100_NODE = node_hw("H100")
+H200_NODE = node_hw("H200")
+H800_NODE = node_hw("H800")          # H100 compute and HBM; only the interconnect is export-cut
 
 # --- Models ---
 # For INTELLECT-2's runs. 
@@ -288,3 +285,12 @@ def areal_14b():  return _areal(R1_QWEN_14B,  32,  80, 21.9, 10500.0, task="code
 #  p50 7,866 | p90 11,190 | p95 11,863 | p99 13,785 | max 14,896
 #  variance: within-prompt sd 1,450 | between-prompt sd 1,796 | ICC 0.61
 def areal_32b():  return _areal(R1_QWEN_32B,  48,  60, 31.1, 8000.0, task="code", er_cv=0.30, mfu_train=0.28)
+
+
+def published_runs():
+    """Every published-run preset as (label, Scenario), in report order: the one list to add a run to.
+    validate.py reports all of them; the validation charts keep those with a published step time."""
+    return [("INTELLECT-2\nshort", intellect2("short")), ("INTELLECT-2\nlong", intellect2("long")),
+            ("INTELLECT-3", intellect3()), ("prime-rl", primerl_paper()), ("prime-rl\nDeepDive", primerl_deepdive()),
+            ("AReaL\n1.5B", areal_1_5b()), ("AReaL\n7B", areal_7b()), ("AReaL\n14B", areal_14b()),
+            ("AReaL\n32B", areal_32b())]

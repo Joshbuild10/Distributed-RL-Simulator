@@ -7,8 +7,9 @@ differently. Unit conventions (seconds, bytes, FLOP, per-node hardware) are in S
 
 import math
 from dataclasses import dataclass, replace
-from typing import Dict
+from typing import Dict, Optional
 
+import penalties as pen
 from specs import Scenario
 
 
@@ -62,6 +63,21 @@ class RolloutTerms:
     t_rollout: float
     c_rollout_total: float
     decode_bound: str
+    f_tail: float = 1.0      # straggler tail on each wave (1 without penalties)
+
+
+@dataclass
+class TrainerPenalty:
+    pp_stages: int           # nodes one replica is pipelined over (1 = fits a node)
+    n_groups: int            # replicas that sync with each other
+    t_comp: float            # update compute, incl. pipeline bubble + activation handoffs
+    t_sync: float            # one replica sync, incl. its straggler tail
+    h: int                   # local steps between syncs
+    t_update: float
+    eta_h: float
+    eta_comp: float
+    eta_act: float
+    replica_loss: float      # Rahman's replica loss multiplier; reported, never folded into eta (1 at H = 1)
 
 
 @dataclass
@@ -89,6 +105,11 @@ class SimResult:
     gputime_ratio: float
     efficiency: Dict[str, float]
     tok_s_inf_achieved: float
+    pen: Optional[TrainerPenalty] = None
+    t_sync: float = 0.0                             # gradient all-reduce per step (0 = single replica / co-located)
+    eta: float = 1.0                                # quality factor: compute the run is worth / compute done
+    eta_parts: Optional[Dict[str, float]] = None
+    goodput: float = 1.0                            # useful fraction of GPU-hours after failures
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +124,6 @@ def with_response_len(s: Scenario, response_len_mean: float) -> Scenario:
 
 def with_capacity_mult(s: Scenario, capacity_mult: float) -> Scenario:
     return replace(s, inf_hw=replace(s.inf_hw, capacity_mult=capacity_mult))
-
-
-def with_n_nodes(s: Scenario, n_nodes: int) -> Scenario:
-    return replace(s, inf_hw=replace(s.inf_hw, n_nodes=n_nodes))
 
 
 def with_mfu_scale(s: Scenario, k: float) -> Scenario:
@@ -154,6 +171,57 @@ def training_time(s: Scenario, c_update: float) -> float:
     # Effective FLOPs/s during training. Accounts for efficiency losses due to node config
     flops_eff = hw.flops * hw.mfu * s.algo.tput_mult_train * hw.penalty_para * hw.n_nodes
     return c_update / flops_eff
+
+
+def gradient_sync_time(s: Scenario, n_groups: int, bw: float, latency: float) -> float:
+    """One gradient all-reduce across n_groups replicas: each sends and receives its compressed
+    gradients. 0 for a single replica."""
+    if n_groups <= 1:
+        return 0.0
+    vol = s.algo.b_grads * s.model.p_total / s.algo.grad_compression
+    return 2 * vol / bw + latency
+
+
+def trainer_penalties(s: Scenario, tc: TrainingCompute, mem: TrainingMemory) -> TrainerPenalty:
+    """Rahman's trainer throughput + quality terms on top of the ideal update time."""
+    p, hw, m, a = s.penalty, s.train_hw, s.model, s.algo
+    inf = float("inf")
+
+    # A replica too big for one node is pipelined over S nodes. Cross-node FSDP (n_shard > gpus/node,
+    # validation presets only) also spans several nodes. Replicas are groups of both.
+    stages = max(1, math.ceil(mem.total / hw.node_hbm))
+    shard_nodes = max(1, math.ceil(hw.n_shard / hw.gpus_per_node))
+    n_groups = hw.n_nodes // (stages * shard_nodes)
+    if n_groups < 1:
+        return TrainerPenalty(stages, 0, inf, inf, 1, inf, 1.0, 1.0, 1.0, 1.0)
+
+    node_flops = hw.flops * hw.mfu * a.tput_mult_train * hw.penalty_para
+    t_rep = tc.c_update / n_groups / (shard_nodes * node_flops)    # one replica's update on one stage slot
+    fabric = hw.gpus_per_node * p.nic_bw_per_gpu
+    if stages == 1:
+        t_comp = t_rep
+    else:
+        # GPipe: (M + S - 1) ticks, each one stage on one micro-batch plus its activation handoff
+        mb = p.micro_batches
+        act = tc.tok_batch / n_groups * m.d_model * a.b_weights_train / p.pp_compression
+        t_handoff = 2 * act / mb / (p.pp_bw or fabric)
+        t_comp = (mb + stages - 1) * (t_rep / (stages * mb)
+                                      + (t_handoff + p.pp_latency) * pen.straggler_factor(stages, p.mode))
+
+    # Replicas exchange full gradients (up + down) over the trainer link, waiting on the slowest
+    n = s.net
+    bw, lat = (n.train_bandwidth, n.train_latency) if n.train_bandwidth else (fabric, p.fabric_latency)
+    t_sync = gradient_sync_time(s, n_groups, bw, lat) * pen.straggler_factor(n_groups, p.mode)
+    h = p.h_inner or max(1, math.ceil(t_sync / t_comp))
+    t_update = max(t_comp, t_sync / h) if p.streaming else t_comp + t_sync / h
+
+    syncs = n_groups > 1
+    return TrainerPenalty(
+        pp_stages=stages, n_groups=n_groups, t_comp=t_comp, t_sync=t_sync, h=h, t_update=t_update,
+        eta_h=pen.eta_h(h, m.p_total) if syncs else 1.0,
+        eta_comp=pen.compression_quality(a.grad_compression, p.scenario, p.error_feedback) if syncs else 1.0,
+        eta_act=pen.activation_compression_quality(p.pp_compression, stages, p.scenario),
+        replica_loss=pen.replica_loss_multiplier(n_groups, m.p_total, h))
 
 
 def training_memory(s: Scenario) -> TrainingMemory:
@@ -260,14 +328,18 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     c_decode = c_dec_layers + c_dec_attn
 
 
+    # Oversampled rollouts are generated alongside the batch, so they fill spare groups before adding waves.
+    oversample_ratio = rl.oversample_ratio()
+    n_gen = rl.size_batch * oversample_ratio
+
     # A "wave" is a continuously-batched set of sequences with rollouts generation.
     # To distribute the workload evenly across waves, we calculate the average sequences per wave
     # We allocate at least one sequence per group of connected nodes. With extras left idling.
     n_groups = max(1, hw.n_nodes // tp)
-    active_groups = min(n_groups, max(1, rl.size_batch)) if seq_par else 0
+    active_groups = min(n_groups, max(1, math.ceil(n_gen))) if seq_par else 0
 
-    n_waves = math.ceil(rl.size_batch / max(seq_par * active_groups, 1)) if seq_par else float("inf")
-    seqs_per_wave = rl.size_batch / (active_groups * n_waves) if seq_par else float("inf")
+    n_waves = math.ceil(n_gen / max(seq_par * active_groups, 1)) if seq_par else float("inf")
+    seqs_per_wave = n_gen / (active_groups * n_waves) if seq_par else float("inf")
 
     # Time calculations (per wave)
     t_dec_comp = (c_decode * seqs_per_wave) / grp_flops if seq_par else float("inf")
@@ -281,10 +353,10 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     t_prefill = (c_prefill * seqs_per_wave) / grp_flops if seq_par else float("inf")
     t_env = v.t_env_per_rollout
 
-    oversample_ratio = rl.oversample_ratio()
-
-    # Overall step time
-    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves * oversample_ratio
+    # Overall step time (oversampling already counted in the waves). With penalties, each wave waits
+    # on its slowest serving group.
+    f_tail = pen.straggler_factor(active_groups, s.penalty.inf_mode) if s.penalty.enabled else 1.0
+    t_rollout = (t_decode + t_inf_attn + t_prefill + t_env) * n_waves * f_tail
 
     # Total rollout FLOPs executed (to calculate compute-ratios). c_prefill is already per-response --
     # divided by the group above when prefix-cached -- so each response counts its prefill once either
@@ -299,7 +371,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
         t_dec_mem=t_dec_mem, t_decode=t_decode, t_inf_attn=t_inf_attn,
         t_prefill=t_prefill, t_env=t_env, oversample_ratio=oversample_ratio, n_waves=n_waves,
         t_rollout=t_rollout, c_rollout_total=c_rollout_total,
-        decode_bound="memory" if t_dec_mem >= t_dec_comp else "compute")
+        decode_bound="memory" if t_dec_mem >= t_dec_comp else "compute", f_tail=f_tail)
 
 
 # Returns the time used for verifying and scoring answers
@@ -323,7 +395,10 @@ def broadcast_time(s: Scenario) -> tuple:
     m, a, n = s.model, s.algo, s.net
     vol = (a.b_weights_inf * m.p_total) / a.compression_ratio
     k = max(a.sync_interval, 1)   # k=0 and k=1 both broadcast every step (divisor 1); k>=2 amortises
-    return vol, (vol / n.bandwidth + n.latency) / k
+    # With penalties, the fan-out waits on the slowest receiving inference node
+    p = s.penalty
+    f_tail = pen.straggler_factor(s.inf_hw.n_nodes, p.inf_mode) if p.enabled else 1.0
+    return vol, (vol / n.bandwidth + n.latency) * f_tail / k
 
 
 # Returns the number of training steps either as given, or given the number of propmts in the dataset and batch size.
@@ -342,8 +417,25 @@ def n_steps(s: Scenario) -> int:
 def simulate(s: Scenario) -> SimResult:
     # Extracts computation times for the scenario
     tc = training_compute(s)
-    t_update = training_time(s, tc.c_update)
     mem = training_memory(s)
+    p = s.penalty
+    if p.enabled:
+        for md in (p.mode, p.inf_mode):
+            if md not in pen.MODES:
+                raise ValueError(f"penalty mode {md!r} not in {pen.MODES}")
+        tp = trainer_penalties(s, tc, mem)
+        t_update = tp.t_update
+        t_sync = tp.t_sync
+    else:
+        tp, t_update = None, training_time(s, tc.c_update)
+        # A distributed trainer all-reduces gradients across sites every step (H = 1), overlapped
+        # with compute, so the update can't finish before the sync does
+        t_sync = 0.0
+        if s.net.train_bandwidth:
+            hw = s.train_hw
+            n_rep = hw.n_nodes // max(1, math.ceil(hw.n_shard / hw.gpus_per_node))
+            t_sync = gradient_sync_time(s, n_rep, s.net.train_bandwidth, s.net.train_latency)
+            t_update = max(t_update, t_sync)
     ro = rollout_terms(s)
     t_verify = verify_time(s, tc.tok_batch, ro.oversample_ratio)
     vol_bc, t_bc = broadcast_time(s)
@@ -355,7 +447,7 @@ def simulate(s: Scenario) -> SimResult:
     # Step composition is set by the off-policy staleness degree k = algo.sync_interval:
     #   k=0  on-policy -> the next batch needs the just-updated weights, so stages run SERIALLY
     #        (t_step = sum). k>=1 off-policy -> inference runs >=1 step behind on stale weights, so
-    #        update+broadcast OVERLAP generation (t_step = max). (Supersedes in_flight_updates.)
+    #        update+broadcast OVERLAP generation (t_step = max).
     if s.algo.sync_interval >= 1:
         t_step = max(stages.values())
         mode = f"overlapped ({s.algo.sync_interval:g}-step off-policy, max of stages)"
@@ -396,14 +488,31 @@ def simulate(s: Scenario) -> SimResult:
     mfu_model = model_flops / max(t_update * peak_train, 1e-9)
     mfu_hw = tc.c_update / max(t_update * peak_train, 1e-9)
 
+    # Penalties: goodput stretches the run; eta discounts what the compute is worth. Mitigation only
+    # costs quality when replicas actually sync. A failed trainer node stalls training (Rahman's modes);
+    # a failed inference node only loses its in-flight sequences, so inference keeps just the
+    # node-down fraction rather than whole-cluster restart/checkpoint semantics.
+    eta, eta_parts, goodput = 1.0, None, 1.0
+    if tp:
+        state = (s.algo.b_weights_train + s.algo.b_grads + s.algo.b_optimiser) * s.model.p_total
+        train_gpus = s.train_hw.n_nodes * s.train_hw.gpus_per_node
+        u_train, eta_mit = pen.reliability(train_gpus, steps * t_step, state, p.mode,
+                                           p.failure_rate, p.recovery_s)
+        u_inf = math.exp(-p.failure_rate * p.recovery_s / 3600.0)
+        goodput = u_train * u_inf
+        eta_parts = dict(h=tp.eta_h, comp=tp.eta_comp, act=tp.eta_act,
+                         mit=eta_mit if tp.n_groups > 1 else 1.0)
+        eta = math.prod(eta_parts.values())
+
     return SimResult(
         tok_s_train=tok_s_train, tok_s_inf=tok_s_inf,
         mfu_model=mfu_model, mfu_hw=mfu_hw,
         scenario=s, tc=tc, mem=mem, ro=ro, t_update=t_update, t_verify=t_verify,
         vol_bc=vol_bc, t_bc=t_bc, stages=stages, t_step=t_step, mode=mode,
-        bottleneck=bottleneck, n_steps=steps, t_total=steps * t_step,
+        bottleneck=bottleneck, n_steps=steps, t_total=steps * t_step / max(goodput, 1e-12),
         policy_age=policy_age, flop_ratio=flop_ratio,
         gputime_ratio=gputime_ratio,
         efficiency={k: v / t_step for k, v in stages.items()},
         tok_s_inf_achieved=tok_s_inf_achieved,
+        pen=tp, t_sync=t_sync, eta=eta, eta_parts=eta_parts, goodput=goodput,
     )

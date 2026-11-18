@@ -1,0 +1,33 @@
+{
+ "min_cluster_90d/DeepSeek-R1-Zero": 64,
+ "min_cluster_90d/Grok-3-Reasoning": 20320,
+ "min_cluster_90d/Grok-4": null,
+ "min_cluster_90d/o1": 112,
+ "min_cluster_90d/o3": 832,
+ "optimal_split/100000": [
+  1636223.6,
+  222,
+  4469,
+  0.2844,
+  99920
+ ],
+ "optimal_split/1024": [
+  173466856.7,
+  3,
+  40,
+  0.375,
+  1024
+ ],
+ "optimal_split/1500000": [
+  1491534.0,
+  244,
+  6443,
+  0.2325,
+  134320
+ ],
+ "wall_d/DeepSeek-R1-Zero": 64.11,
+ "wall_d/Grok-3-Reasoning": 89.86,
+ "wall_d/Grok-4": 172.63,
+ "wall_d/o1": 80.18,
+ "wall_d/o3": 89.57
+}

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ class ModelSpec:
         return self.d_model * self.vocab
 
     @property
-    def p_embed(self) -> float: # Number of params in 
+    def p_embed(self) -> float:
         """Embedding table params (+ head if untied)."""
         n = 1 if self.tied_embeddings else 2
         return n * self.d_model * self.vocab
@@ -42,8 +42,8 @@ class ModelSpec:
         Context length where dot-product attention's FLOPs make up a significant `fraction` of the layer's
         FLOPs.
         Derived on the SAME basis the actual c_attn term uses (attn_coef = N*H*L, not D*L):
-        per token, attn ~ causal_coef*T*attn_coef and layers ~ 2*P_active_layers, so with the
-        causal coefficient 2 the ratio is T*attn_coef/P_active_layers  =>  T = frac*P/attn_coef.
+        per token, attn ~ causal_coef*T*attn_coef and layers ~ 2*p_active, so with the
+        causal coefficient 2 the ratio is T*attn_coef/p_active  =>  T = frac*p_active/attn_coef.
         Note this is much SMALLER for MoE (small P_active) at the same N, H, L.
         """
         return fraction * self.p_active / self.attn_coef
@@ -138,6 +138,7 @@ class AlgoSpec:
                                             #   data-parallel, one micro-batch per GPU (validation-calibrated path).
     
     compression_ratio: float = 1.0      # Weight compression factor
+    grad_compression: float = 1.0       # Gradient compression on the trainer all-reduce
     sync_interval: float = 1.0          # Off-policy staleness degree k. Affects how stages and the per-step broadcast time:
                                         #   k=0  ON-POLICY: Rollout, update and broadcast run serialy, so t_step = sum(stages); broadcast full.
                                         #   k=1  One-step OFF-POLICY. Update and broadcast overlap generation. So t_step = max(stages); broadcast full        hidden behind the step.
@@ -185,6 +186,9 @@ class HWSpec:
 class NetSpec:
     bandwidth: float                   # bytes/s for the weight broadcast
     latency: float = 0.0               # seconds of fixed overhead
+    train_bandwidth: Optional[float] = None    # bytes/s per trainer node for the gradient all-reduce.
+                                               #   None = co-located trainer: sync treated as free
+    train_latency: float = 0.0
 
 
 @dataclass
@@ -201,6 +205,33 @@ class VerifySpec:
 
 
 @dataclass
+# Rahman's distributed-training penalties (penalties.py). enabled=False is the penalty-free model.
+class PenaltySpec:
+    enabled: bool = False
+    mode: str = "relay"                 # Trainer straggler/failure mitigation (penalties.MODES): sync tail + goodput
+    inf_mode: str = "async"             # Inference waves + broadcast fan-out. Streaming generation never waits on a slow node
+    scenario: str = "expected"          # Compression-quality uncertainty: optimistic | expected | conservative
+    error_feedback: bool = True
+
+    # Trainer replica sync. The link is net.train_bandwidth; a co-located trainer uses the fabric below
+    nic_bw_per_gpu: float = 50e9        # 400 Gb/s InfiniBand per GPU (DGX H100)
+    fabric_latency: float = 1e-5        # seconds
+    h_inner: Optional[int] = 1          # Local steps between syncs. 1 = DDP, the only well-defined RL case;
+                                        #   None = smallest H that hides the sync (Rahman's DiLoCo, for parity only)
+    streaming: bool = True              # Overlap the sync with the next step's compute
+
+    # Pipeline parallelism, when one replica doesn't fit a trainer node
+    pp_bw: Optional[float] = None       # bytes/s between stages. None = co-located fabric
+    pp_latency: float = 1e-5            # seconds per stage handoff
+    micro_batches: int = 8
+    pp_compression: float = 4.0         # Activation compression at stage boundaries
+
+    # Hardware failures
+    failure_rate: float = 2.0e-5        # Per GPU-hour
+    recovery_s: float = 600.0
+
+
+@dataclass
 # Data stored for a scenario analysis
 class Scenario:
     name: str
@@ -213,3 +244,4 @@ class Scenario:
     verify: VerifySpec
     notes: str = ""
     published: Optional[Dict[str, Any]] = None
+    penalty: PenaltySpec = field(default_factory=PenaltySpec)

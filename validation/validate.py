@@ -18,7 +18,7 @@ Conventions
 -----------
 * FLOPs/s and bandwidth are specified PER NODE (a node = whatever group of GPUs
   holds one inference replica, or one FSDP data-parallel shard group).
-* P_active_layers excludes embeddings and LM head; those are tracked separately,
+* p_active (decoder layers only) excludes embeddings and LM head; those are tracked separately,
   because for MoE they are a large fraction of "active params" and behave
   differently (head runs on generated tokens in decode, all tokens in training).
 * Causal masking => leading coefficient 2 (not 4) on prefill/training attention.
@@ -38,8 +38,8 @@ Repo layout
 * validation/presets.py   -- hardware/model constants and the published scenarios
 * validation/solvers.py   -- inverse calibration against published numbers
 * validation/reporting.py -- fmt()/report()/sweep_response_len()
-* feasibility_core.py     -- feasibility core (FeasConfig, evaluate, min_cluster, optimal_split)
-* feasibility.py          -- feasibility sweeps/tables/CSV writers + CLI
+* feasibility/            -- the feasibility solver (FeasConfig, evaluate, min_cluster, optimal_split)
+* analysis/               -- every figure and table (python -m analysis)
 """
 
 import argparse
@@ -52,7 +52,7 @@ from typing import Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model import SimResult, Scenario, simulate, with_response_len, with_capacity_mult
-from validation.presets import (intellect2, intellect3, primerl_paper, primerl_deepdive,
+from validation.presets import (intellect2, intellect3, primerl_paper, primerl_deepdive, published_runs,
                                 areal_1_5b, areal_7b, areal_14b, areal_32b)
 from validation.solvers import solve_for_capacity, solve_for_response_len, implied_mfu_report
 from validation.reporting import fmt, report, sweep_response_len
@@ -81,9 +81,7 @@ def main() -> None:
     ap.add_argument("--sweep", action="store_true", help="add sensitivity tables")
     args = ap.parse_args()
 
-    scenarios = [intellect2("short"), intellect2("long"), intellect3(),
-                 primerl_paper(), primerl_deepdive(),
-                 areal_1_5b(), areal_7b(), areal_14b(), areal_32b()]
+    scenarios = [sc for _, sc in published_runs()]
     for s in scenarios:
         report(simulate(s))
 
@@ -158,15 +156,8 @@ def main() -> None:
     # reproduce the published number"; this asks the complementary question -- given honest
     # uncertainty on the inputs nobody published, is the published number inside our predictive
     # range at all? Text counterpart of dashboard chart 1a's error bars.
-    # Explicit short labels, not derived from sc.name: splitting on " (" collapsed
-    # TARGET-SHORT/TARGET-LONG to one indistinguishable "INTELLECT-2" and left "prime-rl
-    # reference run" wide enough to break the column alignment.
-    anchors_for_mc = [("INTELLECT-2 short", intellect2("short")),
-                      ("INTELLECT-2 long", intellect2("long")),
-                      ("INTELLECT-3", intellect3()),
-                      ("prime-rl", primerl_paper()),
-                      ("AReaL-1.5B", areal_1_5b()), ("AReaL-7B", areal_7b()),
-                      ("AReaL-14B", areal_14b()), ("AReaL-32B", areal_32b())]
+    anchors_for_mc = [(lab.replace("\n", " "), sc) for lab, sc in published_runs()
+                      if (sc.published or {}).get("t_step")]
     print_mc_report(anchors_for_mc)
 
     # Complementary to the MC: instead of "is the gap inside our uncertainty", ask "what single

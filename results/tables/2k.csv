@@ -1,0 +1,26 @@
+threshold,target,value,status,text
+MIRI-monitored,DeepSeek-R1-Zero,,over,OVER
+MIRI-monitored,o1,,over,OVER
+MIRI-monitored,o3,,over,OVER
+MIRI-monitored,Grok-3-Reasoning,,over,OVER
+MIRI-monitored,Grok-4,,over,OVER
+EU GPAI,DeepSeek-R1-Zero,,under,under
+EU GPAI,o1,,over,OVER
+EU GPAI,o3,,over,OVER
+EU GPAI,Grok-3-Reasoning,,over,OVER
+EU GPAI,Grok-4,,over,OVER
+MIRI-strict,DeepSeek-R1-Zero,,under,under
+MIRI-strict,o1,,under,under
+MIRI-strict,o3,,over,OVER
+MIRI-strict,Grok-3-Reasoning,,over,OVER
+MIRI-strict,Grok-4,,over,OVER
+EU systemic,DeepSeek-R1-Zero,,under,under
+EU systemic,o1,,under,under
+EU systemic,o3,,under,under
+EU systemic,Grok-3-Reasoning,,over,OVER
+EU systemic,Grok-4,,over,OVER
+SB53 / dual-use,DeepSeek-R1-Zero,,under,under
+SB53 / dual-use,o1,,under,under
+SB53 / dual-use,o3,,under,under
+SB53 / dual-use,Grok-3-Reasoning,,under,under
+SB53 / dual-use,Grok-4,,over,OVER

@@ -1,0 +1,17 @@
+anchor,value,fallback,note,flag
+"prime-rl
+8-shard",0.38535103591660996,,,
+"INTELLECT-2 short
+32-shard",0.08330484571498606,,,*
+"INTELLECT-2 long
+32-shard",0.2115900138860802,,,*
+"INTELLECT-3
+32-shard",0.11878277409909,,,
+"AReaL 1.5B
+32-shard",0.21732370186161892,,,
+"AReaL 7B
+48-shard",0.34077079899896234,,,
+"AReaL 14B
+64-shard",0.19939622989813366,,,
+"AReaL 32B
+96-shard",0.11372248184954109,,,

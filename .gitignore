@@ -1,10 +1,20 @@
 __pycache__/
 */__pycache__
 .claude/
+.cache/
 output.txt
 model_output.txt
-experiments/
 *.txt
-data/
+!requirements.txt
+!analysis/fonts/OFL.txt
+# research code is tracked; raw traces (experiments/lengths/, ~140 MB) and old CLI outputs are not
+experiments/*
+!experiments/*.py
+!experiments/*.md
+!experiments/golden.json
+!experiments/oversampling.json
+data/*
+!data/reasoning_models.csv
+!data/lengths/
 results/poster*
 *step_anatomy.py
