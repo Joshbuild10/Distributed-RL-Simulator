@@ -26,7 +26,7 @@ class ModelSpec:
         return self.d_model * self.vocab
 
     @property
-    def p_embed(self) -> float: # Number of params in 
+    def p_embed(self) -> float:
         """Embedding table params (+ head if untied)."""
         n = 1 if self.tied_embeddings else 2
         return n * self.d_model * self.vocab
@@ -42,8 +42,8 @@ class ModelSpec:
         Context length where dot-product attention's FLOPs make up a significant `fraction` of the layer's
         FLOPs.
         Derived on the SAME basis the actual c_attn term uses (attn_coef = N*H*L, not D*L):
-        per token, attn ~ causal_coef*T*attn_coef and layers ~ 2*P_active_layers, so with the
-        causal coefficient 2 the ratio is T*attn_coef/P_active_layers  =>  T = frac*P/attn_coef.
+        per token, attn ~ causal_coef*T*attn_coef and layers ~ 2*p_active, so with the
+        causal coefficient 2 the ratio is T*attn_coef/p_active  =>  T = frac*p_active/attn_coef.
         Note this is much SMALLER for MoE (small P_active) at the same N, H, L.
         """
         return fraction * self.p_active / self.attn_coef

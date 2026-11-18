@@ -11,7 +11,7 @@ import os
 import re
 
 from . import render
-from .spec import SECTIONS, Fig
+from .spec import SECTION_NOTES, SECTIONS, Fig
 from .theme import FONT, FONT_DIR, THEMES, css_vars
 
 _HEX_TO_VAR = {v.lower(): f"var(--{k})" for k, v in THEMES["light"].items()}
@@ -35,6 +35,7 @@ border-radius:10px;padding:12px 16px;white-space:pre-wrap}
 .card svg{width:100%;height:auto;display:block}
 .card h3{margin:0 0 6px;font-size:15px}.card h3 b{color:var(--accent)}
 .cap{color:var(--muted);font-size:13px;margin:8px 0 6px}
+.intro{max-width:860px;margin:4px 0 14px;font-size:14px}
 .dl a{font-size:12px;margin-right:12px;color:var(--accent);text-decoration:none}
 details{margin-top:6px}summary{cursor:pointer;color:var(--muted);font-size:12px}
 .tbl{overflow-x:auto}table{border-collapse:collapse;font-size:12px;margin-top:8px;white-space:nowrap}
@@ -62,22 +63,22 @@ def _fonts():
     return "".join(faces)
 
 
-def themed_svg(fig):
-    """The figure's light SVG with every role colour rewritten to its CSS variable."""
-    svg = render.render(fig, "svg", "light", title=False).decode("utf-8")
+def themed_svg(fig, svg=None):
+    """The figure's light SVG (`svg` if already drawn) with every role colour rewritten to its CSS variable."""
+    svg = svg or render.render(fig, "svg", "light", title=False).decode("utf-8")
     svg = svg[svg.index("<svg"):]
     svg = re.sub(r'\s(width|height)="[\d.]+pt"', "", svg, count=2)      # let CSS size it
     return re.sub(r"#[0-9a-fA-F]{6}\b", lambda m: _HEX_TO_VAR.get(m.group(0).lower(), m.group(0)), svg)
 
 
-def card(item, files_dir="."):
+def card(item, files_dir=".", svg=None):
     """One figure or table as an HTML card (built in a worker process, assembled by page())."""
     head = f'<h3><b>{item.id}</b> &nbsp;{html.escape(item.title)}</h3>'
     cap = f'<p class="cap">{html.escape(item.caption)}</p>' if item.caption else ""
     if isinstance(item, Fig):
         dl = " ".join(f'<a href="{files_dir}/figures/{item.id}.{e}">{e.upper()}</a>' for e in ("pdf", "svg", "png"))
         dl += f' <a href="{files_dir}/tables/{item.id}.csv">CSV</a>'
-        body = (f"{themed_svg(item)}{cap}<div class='dl'>{dl}</div>"
+        body = (f"{themed_svg(item, svg)}{cap}<div class='dl'>{dl}</div>"
                 f"<details><summary>data</summary><div class='tbl'>{_data_html(item)}</div></details>")
     else:
         body = f"{cap}<div class='tbl'>{item.data.to_html(border=0, escape=True)}</div>"
@@ -99,7 +100,8 @@ def page(entries, config_lines):
         nav.append(f"<h2>{sec} &middot; {SECTIONS[sec]}</h2>"
                    + "".join(f'<a href="#{i}">{i} &nbsp;{html.escape(t[:46])}{"..." if len(t) > 46 else ""}</a>'
                              for i, t, _ in its))
-        main.append(f"<h2><span>{sec}</span> &nbsp;{SECTIONS[sec]}</h2>" + "".join(h for _, _, h in its))
+        note = f"<p class='intro'>{html.escape(SECTION_NOTES[sec])}</p>" if sec in SECTION_NOTES else ""
+        main.append(f"<h2><span>{sec}</span> &nbsp;{SECTIONS[sec]}</h2>{note}" + "".join(h for _, _, h in its))
     cfg = html.escape("\n".join(config_lines))
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>Distributed-RL results</title>"

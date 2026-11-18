@@ -126,10 +126,6 @@ def with_capacity_mult(s: Scenario, capacity_mult: float) -> Scenario:
     return replace(s, inf_hw=replace(s.inf_hw, capacity_mult=capacity_mult))
 
 
-def with_n_nodes(s: Scenario, n_nodes: int) -> Scenario:
-    return replace(s, inf_hw=replace(s.inf_hw, n_nodes=n_nodes))
-
-
 def with_mfu_scale(s: Scenario, k: float) -> Scenario:
     """Scale BOTH trainer and inference MFU by k. Used by the implied-MFU inverse solve: the
     published step time constrains whichever compute stage binds, so scaling both and reading off
@@ -451,7 +447,7 @@ def simulate(s: Scenario) -> SimResult:
     # Step composition is set by the off-policy staleness degree k = algo.sync_interval:
     #   k=0  on-policy -> the next batch needs the just-updated weights, so stages run SERIALLY
     #        (t_step = sum). k>=1 off-policy -> inference runs >=1 step behind on stale weights, so
-    #        update+broadcast OVERLAP generation (t_step = max). (Supersedes in_flight_updates.)
+    #        update+broadcast OVERLAP generation (t_step = max).
     if s.algo.sync_interval >= 1:
         t_step = max(stages.values())
         mode = f"overlapped ({s.algo.sync_interval:g}-step off-policy, max of stages)"

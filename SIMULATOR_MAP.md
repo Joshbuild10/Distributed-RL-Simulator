@@ -1,28 +1,8 @@
 # SIMULATOR_MAP — spec ↔ code reconciliation
 
-> **DRAFT, auto-assembled from the code on 2026-08-17; refreshed 2026-11-10 (ω in waves, A-iii, A-x closed).** Intended to be redrafted by hand.
-> Purpose: satisfy PROJECT_CONTEXT §4 ("inventory actual modules/functions vs the spec, flag
-> discrepancies rather than silently fixing them"). Numbers here are reproduced by
-> `python -m validation.validate`.
-
-## Repo layout
-
-| Path | Role |
-|---|---|
-| `penalties.py` | Rahman's distributed-training penalties (straggler tails, goodput, η factors), ported verbatim; toggled by `PenaltySpec` |
-| `MODEL_CALCULATIONS.md` | Every equation the code computes, with notation and code identifiers (report Appendix B) |
-| `specs.py` | Dataclasses: `ModelSpec`, `RLSpec`, `AlgoSpec`, `HWSpec`, `NetSpec`, `VerifySpec`, `Scenario` |
-| `model.py` | Analytic core: `training_compute`, `training_time`, `training_memory`, `rollout_terms`, `verify_time`, `broadcast_time`, `n_steps`, `simulate` |
-| `validation/presets.py` | Published run scenarios (INTELLECT-2/3, prime-rl ×2, AReaL ×4) + hardware/model constants |
-| `validation/solvers.py` | Inverse calibration (`solve_for_response_len`, `solve_for_capacity`, `solve_for_mfu`) |
-| `validation/reporting.py` | `report()`, `CALIBRATION_METRICS`, `sweep_response_len()` |
-| `validation/validate.py` | Entry point: report every scenario + inverse-calibration summary |
-| `feasibility_core.py` | `FeasConfig`, `evaluate`, `min_gpus_for_tsb`, `min_cluster`, `optimal_split`, model/GPU/target registries, formatters |
-| `feasibility.py` | Sweeps, tables, CSV writers, CLI |
-| `analysis/` | Every figure and table: `scenarios` (threat model + variants) -> `sweep` (cached evaluations -> DataFrames) -> `figures/` (one module per section) -> `render` (matplotlib, ERA theme) -> paper exports, `results/dashboard.html`, and the Streamlit explorer. `python -m analysis [build\|explore\|list]` |
-| `results/` | Build outputs: `dashboard.html`, `figures/` (PDF/SVG/PNG), `tables/` (CSV); `lengths/` (measured response-length summaries the figures read) |
-| `lengths_io.py`, `svgkit.py` | Length-file reader (used by `analysis`); legacy SVG primitives (now only the gitignored experiment plots) |
-| `experiments/` | Measurement campaign, invariant gate `check_invariants.py` (gitignored for now) |
+Where each item of the working doc's model spec lives in the code, the places the code deliberately
+departs from it, and the register of known gaps. The equations themselves are in
+`MODEL_CALCULATIONS.md`; the repo layout and commands in `README.md`.
 
 ## Spec → implementation
 
@@ -44,8 +24,8 @@
 | `T_verify` rule- and model-based | `model.verify_time` | ✅ |
 | `T_broadcast = vol/bw + latency` | `model.broadcast_time` | ✅ one-directional (Rahman's has ×2) |
 | Policy age (= `sync_interval`) | `model.simulate` | ✅ reported as `policy_age`; **not wired into `N_steps`** |
-| Mode: target time/FLOP → required nodes | `feasibility_core.min_cluster` | ✅ |
-| Mode: optimal trainer:inference split | `feasibility_core.optimal_split` | ✅ derived exactly (no preset fraction grid) |
+| Mode: target time/FLOP → required nodes | `feasibility.min_cluster` | ✅ |
+| Mode: optimal trainer:inference split | `feasibility.optimal_split` | ✅ derived exactly (no preset fraction grid) |
 | Inference tensor parallelism across nodes | `model.rollout_terms`, `HWSpec.inf_tp` | ✅ serving group of `inf_tp` nodes, one weight copy |
 
 ## Deliberate deviations from the spec (do not "fix")

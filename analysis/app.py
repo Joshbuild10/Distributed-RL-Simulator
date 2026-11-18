@@ -12,10 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 
 from analysis import figures  # noqa: F401  (registers everything)
-from analysis import render
+from analysis import render, sweep
 from analysis.scenarios import BATCH_MODES, Options
-from analysis.spec import REGISTRY, SECTIONS, Fig
-from feasibility_core import FeasConfig, GPUS, HIGH_END_GPUS, MODELS, config_lines, with_cfg
+from analysis.spec import REGISTRY, SECTION_NOTES, SECTIONS, Fig
+from feasibility import FeasConfig, HIGH_END_GPUS, MODELS, config_lines, with_cfg
 
 st.set_page_config(page_title="Distributed-RL explorer", layout="wide")
 D = FeasConfig(target_c_rl=2.5e25)
@@ -24,7 +24,9 @@ D = FeasConfig(target_c_rl=2.5e25)
 @st.cache_resource(show_spinner=False, max_entries=512)
 def build(name, key, _opts):
     """Figure/table `name` under options `key` (the hashable repr of _opts)."""
-    return REGISTRY[name][1](_opts)
+    item = REGISTRY[name][1](_opts)
+    sweep.flush()                              # share solver results with later sessions and builds
+    return item
 
 
 @st.cache_data(show_spinner=False, max_entries=512)
@@ -34,7 +36,9 @@ def image(name, key, theme, _fig):
 
 with st.sidebar:
     st.markdown("### Distributed-RL explorer")
-    theme = st.radio("Chart theme", ["light", "dark"], horizontal=True)
+    pick = st.radio("Chart theme", ["auto", "light", "dark"], horizontal=True,
+                    help="auto follows this page's theme, so the charts sit flush on it")
+    theme = (st.context.theme.type or "light") if pick == "auto" else pick
     st.markdown("**Run options**")
     penalties = st.toggle("Rahman penalties", help="Straggler tails, goodput, sync quality (penalties.py)")
     batch_mode = st.selectbox("Batch per budget", list(BATCH_MODES), help="\n\n".join(
@@ -68,6 +72,8 @@ with st.sidebar:
 
 sections = list(SECTIONS)
 sec = st.segmented_control("Section", sections, default="2", format_func=lambda s: f"{s} · {SECTIONS[s]}")
+if sec in SECTION_NOTES:
+    st.markdown(SECTION_NOTES[sec])
 names = [n for n, (s, _) in REGISTRY.items() if s == sec]
 key = repr(opts)
 with st.expander("Configuration", expanded=False):
@@ -79,13 +85,14 @@ for name in names:
         item = build(name, key, opts)
     st.markdown(f"#### {item.id} &nbsp; {item.title}")
     if isinstance(item, Fig):
-        st.image(image(name, key, theme, item), use_container_width=True)
+        st.image(image(name, key, theme, item), width="stretch")
         if item.caption:
             st.caption(item.caption)
         c1, c2, c3, _ = st.columns([1, 1, 1, 5])
-        c1.download_button("PDF", render.render(item, "pdf", theme, title=False), f"{item.id}.pdf",
+        # rendered on click, not on every rerun: a PDF costs ~3 s a figure
+        c1.download_button("PDF", lambda it=item: render.render(it, "pdf", theme, title=False), f"{item.id}.pdf",
                            key=f"pdf-{name}")
-        c2.download_button("PNG", render.render(item, "png", theme, title=False), f"{item.id}.png",
+        c2.download_button("PNG", lambda it=item: render.render(it, "png", theme, title=False), f"{item.id}.png",
                            key=f"png-{name}")
         c3.download_button("CSV", item.data.to_csv(index=False), f"{item.id}.csv", key=f"csv-{name}")
         with st.expander("data"):
@@ -93,6 +100,6 @@ for name in names:
     else:
         if item.caption:
             st.caption(item.caption)
-        st.dataframe(item.data, use_container_width=True)
+        st.dataframe(item.data, width="stretch")
         st.download_button("CSV", item.data.to_csv(), f"{item.id}.csv", key=f"csv-{name}")
     st.divider()

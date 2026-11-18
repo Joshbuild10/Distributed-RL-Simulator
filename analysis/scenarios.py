@@ -10,8 +10,8 @@ link speed whatever the explorer's slider says.
 """
 from dataclasses import dataclass
 
-from feasibility_core import (FeasConfig, MODELS, model_targets, target_batch, target_batch_iso, batch_split,
-                              with_cfg)
+from feasibility import (FeasConfig, MODELS, model_targets, target_batch, target_batch_iso, batch_split,
+                         with_cfg)
 from specs import PenaltySpec
 
 TARGETS = model_targets()                     # {name: C_RL}, published runs only
@@ -40,8 +40,6 @@ class Options:
     over: tuple = ()                          # FeasConfig overrides as ((field, value), ...); hashable, so
                                               #   `model` is given by MODELS key, not ModelSpec
 
-    def with_over(self, **kw):
-        return Options(self.penalties, self.batch_mode, tuple({**dict(self.over), **kw}.items()))
 
 
 BATCH_MODES = {

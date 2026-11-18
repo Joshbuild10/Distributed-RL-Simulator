@@ -2,7 +2,7 @@
 Section 2.1 -- decentralised vs a centralised datacentre: what the WAN, the node size and the trainer's
 placement cost, holding everything else at the threat model.
 """
-from feasibility_core import MODELS
+from feasibility import MODELS
 from ..scenarios import TARGETS, scenario
 from ..spec import Fig, register, stock_label
 from ..sweep import max_compute, min_gpus, sweep

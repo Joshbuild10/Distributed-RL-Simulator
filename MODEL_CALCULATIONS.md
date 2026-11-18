@@ -1,7 +1,7 @@
 # Distributed RL Roofline Model — Full Calculations
 
 Replaces the report's *Appendix B: Full Model Calculations*. Every equation below is what the code
-computes (`model.py` for one RL step, `feasibility_core.py` for the solver), with the code identifier
+computes (`model.py` for one RL step, `feasibility/` for the solver), with the code identifier
 alongside so a reader can check one against the other. Equations are written out in plain text in the
 same style as the working doc; `ceil`, `floor`, `max`, `min` are the usual functions.
 
@@ -247,7 +247,7 @@ N_steps = C_RL / C_step
 T_run(GPUs_train, GPUs_inf, tp) = N_steps * T_step,   or ∞ if !model_fits or !fits
 ```
 
-## 8. Solver (`feasibility_core.py`)
+## 8. Solver (`feasibility/solver.py`)
 
 One routine sizes everything, so the two solvers built on it cannot disagree.
 
@@ -365,7 +365,7 @@ pre-training compute buys back the loss, which has no RL analogue. Both are 1 at
 `η` is carried on every result (`evaluate`, the max-compute point) but **never sizes anything**:
 quality-adjusted compute, `C_RL * η`, is a separate presentation. Because the broadcast tail grows with
 the inference node count the solver picks, the solver now also checks that the composed step fits its
-budget. Toggle: `FeasConfig.penalty`, `feasibility.py --penalties`, `python -m analysis --penalties` for the figures.
+budget. Toggle: `FeasConfig.penalty`; `python -m analysis --penalties` for the figures.
 
 ### What this means at the threat-model operating point
 
@@ -387,37 +387,11 @@ So at the stock frontier the decentralised ceiling is the weight broadcast — `
 (1 Gbps x 16) and `k` — with weight streaming (354 s) just below it. The trainer's all-reduce only
 takes over if gradients are compressed less than ~32x (810 s at 16x, halving the ceiling).
 
-### Headline numbers at these inputs
+### Headline numbers
 
-Reproduced from the code on 2026-11-10 (`python -m analysis`, `python feasibility.py`).
-Per-target rows use the budget-scaled batch (256 → 65,536); the by-stock rows use the flat 65,536.
-
-Minimum GPUs to finish (decentralised), as `total GPUs (trainer GPUs)`; `X` = misses the window:
-
-| Target `C_RL` | 30 d | 90 d | 180 d | 720 d |
-|---|---|---|---|---|
-| DeepSeek-R1-Zero 2e22 | 96 (48) | 64 (48) | 64 (48) | 64 (48) |
-| o1 1e23 | 272 (80) | 112 (48) | 80 (48) | 64 (48) |
-| o3 1e24 | 3,008 (768) | 896 (256) | 432 (128) | 128 (48) |
-| Grok-3 2.5e25 | X (floor 69 d) | 23,904 (6,016) | 12,016 (3,072) | 2,560 (768) |
-| Grok-4 2.5e26 | X (floor 173 d) | X (floor 173 d) | 105,152 (29,952) | 25,440 (7,552) |
-
-Maximum `C_RL` in 180 d on a fixed stock, decentralised vs the centralised comparator:
-
-| Stock | Decentralised | GPUs it can use | Bound by | Centralised | Ratio |
-|---|---|---|---|---|---|
-| 128 | 2.8e23 | 128 | rollout | 5.4e23 | 1.9x |
-| 1,024 | 2.2e24 | 1,024 | rollout | 4.3e24 | 1.9x |
-| 10,000 | 2.4e25 | 9,968 | update | 4.5e25 | 1.9x |
-| 100,000 | 2.4e26 | 99,920 | update | 4.5e26 | 1.9x |
-| 300,000 | 2.6e26 | 134,320 | **broadcast** | 1.3e27 | 5.0x |
-| 1,500,000 | 2.6e26 | 134,320 | **broadcast** | 3.6e27 | 13.9x |
-
-- The decentralised ceiling is a **rate** — 2.6e26 per 180 days (1.45e24 FLOP/day) — reached at
-  134,320 GPUs, of which 31,232 (244 nodes of 128, ~35 MW at the meter) are trainers.
-- Doubling inference HBM bandwidth cuts the Grok-4 / 180 d cluster from 105,152 to 67,568 GPUs.
-- Link needed to keep the broadcast hidden for Grok-3 in 180 d (Mbps at 1x compression): Llama-3.1-8B
-  1,334; 70B 1,423; 405B 1,537; Qwen3-235B-A22B 9,646; Llama-4 402B-A17B 29,499.
+Not repeated here, so they cannot go stale: minimum GPUs per target and window are chart 2a and
+table A1, maximum `C_RL` by stock 2b / A3, decentralised vs centralised 2n-2q, the HBM-bandwidth lever
+2j, the link each model needs 2g. `python -m analysis show <name>` prints any of them.
 
 ## Inputs used in the feasibility study (`FeasConfig` defaults)
 

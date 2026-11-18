@@ -2,9 +2,9 @@
 Section 2 -- feasibility of the decentralised threat model: what each RL budget costs, what a stock
 can do, and which levers move it.
 """
-from feasibility_core import (BASELINE_BATCH, BATCH_SWEEP, GPUS, HBM_MULTS, HIGH_BATCH, HIGH_END_GPUS,
-                              MODELS, POLICY_THRESHOLDS, batch_split, node_gpus_tpp_cap, optimal_split,
-                              per_step_flop, smallest_fitting_gpu, total_time, with_cfg)
+from feasibility import (BASELINE_BATCH, BATCH_SWEEP, HBM_MULTS, HIGH_BATCH, HIGH_END_GPUS,
+                         MODELS, POLICY_THRESHOLDS, batch_split, node_gpus_tpp_cap, optimal_split,
+                         per_step_flop, smallest_fitting_gpu, total_time, with_cfg)
 from ..scenarios import BATCH_MODES, REFERENCE_C_RL, TARGETS, scenario
 from ..spec import Fig, fmt_count, register, stock_label, tex_sci
 from ..sweep import max_compute, min_gpus, required_link, sweep
@@ -41,9 +41,9 @@ def _window_fig(fig_id, title, opts, cfg_fn, caption=""):
 def frontier(opts):
     return _window_fig("2a", "Minimum GPUs to finish each RL compute budget", opts,
                        lambda t: scenario(opts, target=t),
-                       caption="Llama-3.1-405B, decentralised threat model. Hollow bars miss the window: drawn at "
-                               "the GPUs that reach the fastest achievable wall-clock, labelled with it. "
-                               + BATCH_MODES[opts.batch_mode])
+                       caption=f"{scenario(opts).model.name}, decentralised threat model. Hollow bars miss the "
+                               f"window: drawn at the GPUs that reach the fastest achievable wall-clock, which is "
+                               f"written inside. " + BATCH_MODES[opts.batch_mode])
 
 
 @register("max_compute", "2")
@@ -87,7 +87,8 @@ def tornado(opts):
 
 @register("cross_model", "2")
 def cross_model(opts):
-    fit = {n: smallest_fitting_gpu(m, scenario(opts).gpus_per_node) for n, m in MODELS.items()}
+    base = scenario(opts)
+    fit = {n: smallest_fitting_gpu(m, base.gpus_per_node, base.b_weights_inf) for n, m in MODELS.items()}
 
     def cfg(n):
         return scenario(opts, model=MODELS[n], gpu=fit[n], target_c_rl=REFERENCE_C_RL) if fit[n] else None
@@ -100,7 +101,7 @@ def cross_model(opts):
     data = sweep({"model": list(MODELS), "window_d": [90, 180]}, point)
     return Fig("2d", f"Cross-model: minimum GPUs at {tex_sci(REFERENCE_C_RL)} FLOP (smallest node family "
                      f"that holds the weights)", "bars", data, x="model", series="window_d", ordinal=False,
-               ylabel="GPUs to finish in window", x_fmt=MSHORT.get, series_fmt=days, inner="steps_note",
+               ylabel="GPUs to finish in window", x_fmt=lambda m: MSHORT.get(m, m), series_fmt=days, inner="steps_note",
                caption="Smaller models need more GPUs at fixed compute: less compute per step means more serial "
                        "steps, deeper into the latency wall (step counts inside the bars).")
 
@@ -127,7 +128,7 @@ def _gpu_heatmap(fig_id, title, opts, node_fn, col_fmt, caption):
 def gpu_family(opts):
     return _gpu_heatmap("2e", "GPU family x RL budget: minimum GPUs in 180 days", opts, lambda g: {}, str,
                         caption="Cells: GPUs to finish, or the fastest achievable wall-clock ('!') when 180 days "
-                                "is out of reach. Nodes of 16 GPUs throughout.")
+                           "is out of reach. Nodes of 16 GPUs throughout.")
 
 
 @register("gpu_family_capped", "2")
@@ -136,18 +137,19 @@ def gpu_family_capped(opts):
     return _gpu_heatmap("2f", f"Same, under a {H100_EQUIV}-H100-equivalent export cap per node", opts,
                         lambda g: dict(gpus_per_node=cap[g]), lambda g: f"{g}\n{cap[g]}/node",
                         caption="Each node shrunk to stay under 16 H100-equivalents of TPP and HBM, so "
-                                "high-FLOP or high-HBM parts get small nodes.")
+                           "high-FLOP or high-HBM parts get small nodes.")
 
 
 @register("required_link", "2")
 def required_link_fig(opts):
-    fit = {n: smallest_fitting_gpu(m, scenario(opts).gpus_per_node) for n, m in MODELS.items()}
+    base = scenario(opts)
+    fit = {n: smallest_fitting_gpu(m, base.gpus_per_node, base.b_weights_inf) for n, m in MODELS.items()}
     models = [n for n in MODELS if fit[n]]
     data = sweep({"model": models, "target": list(TARGETS)},
                  lambda p: required_link(scenario(opts, target=p["target"], batch=False, model=MODELS[p["model"]],
-                                                  gpu=fit[p["model"]]), 180))
+                                             gpu=fit[p["model"]]), 180))
     return Fig("2g", "WAN link needed so communication never bottlenecks (180 days)", "bars", data, x="model",
-               series="target", fmt="rate", ylabel="link x compression (Mbps)", x_fmt=MSHORT.get,
+               series="target", fmt="rate", ylabel="link x compression (Mbps)", x_fmt=lambda m: MSHORT.get(m, m),
                series_fmt=lambda t: t,
                caption="The slower of the weight broadcast and the trainer's gradient all-reduce, quoted at the "
                        "broadcast's 1x so a real compression factor divides it.")
@@ -160,8 +162,8 @@ def batch_size(opts):
         return f"{fmt_count(total)}\n{b}x{n}"
     data = sweep({"batch": list(BATCH_SWEEP), "target": list(TARGETS)},
                  lambda p: min_gpus(scenario(opts, target=p["target"],
-                                             **dict(zip(("prompts_per_batch", "responses_per_prompt"),
-                                                        batch_split(p["batch"])))), 180))
+                                        **dict(zip(("prompts_per_batch", "responses_per_prompt"),
+                                                   batch_split(p["batch"])))), 180))
     return Fig("2h", "Rollout batch vs minimum GPUs (180 days)", "bars", data, x="batch", series="target",
                ylabel="GPUs to finish in 180 days", xlabel="rollouts per step (prompts x responses)",
                x_fmt=label, caption="Larger batches mean fewer serial steps for the same compute.")
@@ -172,7 +174,7 @@ def batch_compare(opts):
     sizes = {"base": BASELINE_BATCH, "large": HIGH_BATCH}
     data = sweep({"target": list(TARGETS), "setting": [f"{w} days, {k}" for w in (90, 180, 720) for k in sizes]},
                  lambda p: min_gpus(scenario(opts, target=p["target"], **sizes[p["setting"].split(", ")[1]]),
-                                    int(p["setting"].split(" ")[0])))
+                               int(p["setting"].split(" ")[0])))
     b, h = BASELINE_BATCH, HIGH_BATCH
     return Fig("2i", f"Minimum GPUs: base batch ({b['prompts_per_batch']}x{b['responses_per_prompt']}) vs large "
                      f"({h['prompts_per_batch']}x{h['responses_per_prompt']})", "bars", data, x="target",
@@ -195,10 +197,10 @@ def policy_thresholds(opts):
     bars = sorted(POLICY_THRESHOLDS.items(), key=lambda kv: kv[1])
     data = sweep({"threshold": [n for n, _ in bars], "target": list(TARGETS)},
                  lambda p: (lambda over: dict(value=float("nan"), status="over" if over else "under",
-                                              text="OVER" if over else "under"))(
+                                         text="OVER" if over else "under"))(
                      TARGETS[p["target"]] >= POLICY_THRESHOLDS[p["threshold"]]))
     return Fig("2k", "RL budgets against governance FLOP thresholds", "heatmap", data, x="threshold",
-               series="target", x_fmt=lambda n: f"{n}\n{POLICY_THRESHOLDS[n]:.0e}",
+               series="target", x_fmt=lambda n: f"{n}\n{tex_sci(POLICY_THRESHOLDS[n])}",
                series_fmt=lambda t: f"{t}  {tex_sci(TARGETS[t])}", xlabel="reporting threshold (total-run FLOP)",
                ylabel="RL budget (FLOP)")
 
@@ -214,15 +216,11 @@ def response_length(opts):
 
 @register("fp4_inference", "2")
 def fp4_inference(opts):
-    import pandas as pd
     gpu = "B300"
-    rows = []
-    for t in TARGETS:
-        bf = min_gpus(scenario(opts, target=t, batch=False, gpu=gpu), 180)
-        q = min_gpus(scenario(opts, "fp4_inference", target=t, batch=False, gpu=gpu), 180)
-        rows.append(dict(target=t, predicted=bf["value"], published=q["value"]))
-    data = pd.DataFrame(rows)
-    data["target"] = pd.Categorical(data["target"], categories=list(TARGETS), ordered=True)
+    variants = {"BF16 inference": (), "4-bit inference": ("fp4_inference",)}
+    data = sweep({"target": list(TARGETS), "inference": list(variants)},
+                 lambda p: min_gpus(scenario(opts, *variants[p["inference"]], target=p["target"], batch=False,
+                                             gpu=gpu), 180))
     return Fig("2m", f"Fully 4-bit inference on {gpu} (compute, weights and KV) vs BF16: minimum GPUs, 180 days",
-               "multiples", data, x="target", labels=("BF16 inference", "4-bit inference"),
-               ylabel="GPUs to finish", caption="Each panel has its own linear axis. Trainer stays BF16.")
+               "bars", data, x="target", series="inference", ylabel="GPUs to finish in 180 days",
+               x_fmt=target_label, caption="Trainer stays BF16. Hollow bars miss the window, as in 2a.")

@@ -1,0 +1,6 @@
+target,C_RL,feasible,H100s,wall,total MW,sites @1 MW,sites @10 MW,sites @100 MW
+DeepSeek-R1-Zero,2.0e+22,yes,64,66 d,0.1,1,1,1
+o1,1.0e+23,yes,112,82 d,0.1,1,1,1
+o3,1.0e+24,yes,896,84 d,1.0,2,1,1
+Grok-3-Reasoning,2.5e+25,yes,"23,904",89 d,26.8,27,3,1
+Grok-4,2.5e+26,NO*,"134,304",173 d,150.4,151,16,2

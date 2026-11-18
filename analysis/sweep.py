@@ -16,25 +16,33 @@ import math
 
 import pandas as pd
 
-from feasibility_core import (evaluate, max_compute_operating_point, steps_and_c_rl,
-                              required_bcast_mbps)
+from feasibility import (evaluate, max_compute_operating_point, steps_and_c_rl,
+                         required_bcast_mbps)
+from . import cache
+from .spec import fmt_duration
 
 DAY = 86400
 NAN = float("nan")
-_cache = {}
+_cache = None                                   # loaded from disk on first use (cache.py)
+_new = {}
 
 
 def cached(fn, cfg, *args):
-    """fn(cfg, *args) computed once per (fn, config, args). FeasConfig's repr is a complete,
-    deterministic description of it, so it doubles as the key."""
+    """fn(cfg, *args) computed once per (fn, config, args), across builds too. FeasConfig's repr is a
+    complete, deterministic description of it, so it doubles as the key."""
+    global _cache
+    if _cache is None:
+        _cache = cache.load_results()
     key = (fn.__name__, repr(cfg), args)
     if key not in _cache:
-        _cache[key] = fn(cfg, *args)
+        _cache[key] = _new[key] = fn(cfg, *args)
     return _cache[key]
 
 
-def cache_size():
-    return len(_cache)
+def flush():
+    """Persist the results computed since the last flush."""
+    cache.save_results(_new)
+    _new.clear()
 
 
 def sweep(axes, point_fn):
@@ -67,7 +75,7 @@ def min_gpus(cfg, window_d):
                   t_step=r.t_step, t_update=r.t_update, t_rollout=r.stages["rollout+verify"], t_bc=r.t_bc)
     if ev["feasible"]:
         return {**_plot(value=ev["gpus"]), "status": "ok", **common}
-    return {**_plot(fallback=ev["gpus"], note=f"{ev['wall_d']:.0f} d"), "status": "infeas", **common}
+    return {**_plot(fallback=ev["gpus"], note=fmt_duration(ev["wall_d"] * DAY)), "status": "infeas", **common}
 
 
 def max_compute(cfg, stock, window_d):

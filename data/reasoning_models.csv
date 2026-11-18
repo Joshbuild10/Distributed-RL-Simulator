@@ -1,0 +1,40 @@
+Model,Base model,Total params (B),Active params (B),Architecture,Pretraining FLOPs,pretrain source,Post-training/RL FLOPS,RL source,RL % of compute,Average response length,Training hardware time/config notes,Other notes,Source URLs
+Tulu-3 8B,Llama 3.1 8B,8,8,dense,7.50E+23,"6ND estimate. N=8B, D=15.6T. Note the significant overtraining compared with chinchilla optimal 160B tokens",2.80E+19,"Derived from GPU-hours. SFT: 192, DPO: 80, RLVR: 520, Total: 782
+On H100s, this equals 2.8e21 FLOPs https://www.wolframalpha.com/input?i2d=true&i=990*Power%5B10,12%5D*732*3600
+At 1% MFU, that's 2.8e19 FLOPs/
+Based on compute accounting, RLVR likely took 2e19 FLOPs, at 1.18% MFU.
+Including SFT(3.75)+DPO(2.45) plausible total 8e19",,,8 H100s during DPO/RLVR. 32 H100s during SFT. Max token length 2048,RL Tasks:,https://arxiv.org/abs/2411.15124
+Tulu-3 70B,Llama 3.1 70B,70,70,dense,6.50E+24,"6ND estimate. N=70B, D=15.6T. Note the significant overtraining",2.60E+20,"From GPU-hours. SFT: 3200, DPO: 1216, RLVR: 2880, Total: ~7300
+On H100s, this equals 2.6e22 FLOPs https://www.wolframalpha.com/input?i2d=true&i=990*Power%5B10,12%5D*7300*3600
+
+At 1% MFU, that's 2.6e20 FLOPs
+Based on compute accounting, RLVR likely took 1e20 FLOPs, at 1% MFU.
+With SFT(3.7)+DPO(3), plausible total 7.7e20",,,,,https://arxiv.org/abs/2411.15125
+Tulu-3 405B,Llama 3.1 405B Base,405,405,dense,3.80E+25,Disclosed (https://ai.meta.com/research/publications/the-llama-3-herd-of-models/),1.00E+21,"From GPU-hours. SFT: 3200, DPO: 1216 (previous two unreported, assume same as before), RLVR: 11776, Total: ~16000
+On H100s, this equals 5.7e22 FLOPs https://www.wolframalpha.com/input?i2d=true&i=990*Power%5B10,12%5D*7300*3600
+
+At 2% MFU, that's 1.4e21 FLOPs
+Based on compute accounting, RLVR likely took 1e21 FLOPs, at 2.27% MFU. SFT/DPO may have had a combined 3.9e21.",,,,,https://arxiv.org/abs/2411.15126
+DeepSeek-R1-Zero,DeepSeek-V3-Base,671,37,MoE,3.40E+24,"6ND, D=14.8T estimate by epoch https://epoch.ai/gradient-updates/what-went-into-training-deepseek-r1",2.00E+22,"Flop calculations 2e22 (assume avg 8k response length).
+1.3e22 with 5k, 5e22 with 15k (upper end)
+ 198 hours on 64x8 H800s (FP8), raw FLOPs 5.8e23.
+ ~Est 3.5% MFU",<1%,8000,,RL% disclosed as ratio; absolute diverges by what's counted (ratio-implied 1.3e23 vs GPU-hrs/FLOP-tally-implied 2-6e22 at typical RL MFU 0.05-0.20),https://arxiv.org/abs/2501.12948
+DeepSeek-R1,DeepSeek-V3-Base,671,37,MoE,3.40E+24,"6ND, D=14.8T estimate by epoch https://epoch.ai/gradient-updates/what-went-into-training-deepseek-r1",>2e22,above (haven't acccounted for sft yet),,,,"Epoch est 6e23 vs GPU-hrs count differ; our length probes: R1/R1-0528 partial, code>>math single-turn",https://arxiv.org/abs/2501.12948
+Grok 3 reasoning,Grok 3 Base,2400,n/d,n/d,3.50E+26,Epoch's likely estimates https://epoch.ai/data/ai-models?subset=large-scale&view=graph&tab=notable,2.50E+25,Reverse extrapolation from graph,10%,,,,
+Grok 4,n/d,2400,n/d,n/d,5.00E+26,"Epoch's speculative estimates: 5E+26, removing pretraining (probably at least 3.5 based on Grok 3). Roughly tracks with training on 30T tokens (Llama4 scale)",2.50E+26,RL between 10-100% of pre-training (Epoch database).Video announcement https://x.com/SpaceXAI/status/1943158495588815072,50%,,,,"https://x.ai/news/grok-4, https://x.com/SpaceXAI/status/1943158495588815072"
+Deepseek V4 Pro,Deepseek v4,1600,49,MoE,9.70E+24,Epoch estimate,todo,,,,,,
+Inkling,,975,41,MoE,1.10E+25,6ND. 45T training tokens,todo,,,,,,https://thinkingmachines.ai/news/introducing-inkling/
+Olmo-3-Think-32B,Olmo-3-Base-32B,32,32,dense,1.00E+24,6ND. 5.5T reported tokens,todo,,n/d,14000,,Fully open incl. RL data/recipe,https://allenai.org/olmo
+Olmo-3-Think-7B,Olmo-3-Base-7B,7,7,dense,2.30E+23,n/d,todo,,n/d,,,Fully open incl. RL data/recipe,https://allenai.org/olmo
+Olmo-3-RL-Zero,Olmo-3-Base-7B,7,7,dense,2.30E+23,n/d,todo,,n/d,2000,,Fully open incl. RL data/recipe,https://allenai.org/olmo
+DeepSeekMath,,,,,,,,,,,,,https://arxiv.org/pdf/2402.03300
+Open-reasoner-zero,R1-Distill-Qwen,,,,,,,,,,,,"https://github.com/Open-Reasoner-Zero/Open-Reasoner-Zero, https://arxiv.org/pdf/2503.24290 "
+Llama-Nemotron-Ultra-253B,Llama-3.1-405B,253,253,dense,3.80E+25,Disclosed as above,1.25E+23,Epoch derived. 140k H100-hrs disclosed -> FLOP at MFU 0.05-0.2,<1%,,,Trained on R1-generated data (hidden upstream compute invisible here),https://arxiv.org/abs/2505.00949
+Phi-4-reasoning,Phi-4,14,14,dense,8.00E+23,derived(6ND est),4.00E+19,derived(~460M RL tokens disclosed -> 6ND),<0.01%,,,Distilled/RL on o3-mini traces (hidden upstream),https://arxiv.org/abs/2504.21318
+MiniMax-M1,MiniMax-Text-01,456,45.9,MoE,n/d,n/d(+7.5T continual-pretrain tokens),1.00E+23,derived(512 H800 x 3 wk ~$534k disclosed),n/d,,,$534k RL disclosed,https://arxiv.org/abs/2506.13585
+A.X K2,,,,,,,,,,,,,https://huggingface.co/skt/A.X-K2
+INTELLECT-2,QwQ-32B,32,32,dense,n/d,n/d,n/d,n/d(decentralised GRPO; compute not cleanly reported),n/d,2280-6000,,Base QwQ-32B already RL-saturated; our QwQ-32B length data ~2.3k(easy)-6k(math); decentralised swarm run,https://arxiv.org/abs/2505.07291
+INTELLECT-3,GLM-4.5-Air,106,12,MoE,n/d,n/d,n/d,n/d(centralised 512xH200 prime-rl; step time disclosed not total FLOP),n/d,25084,,Our on-policy GLM-4.5-Air code E[R]=25.1k (cv0.44) validates the sim preset; multi-domain (math/code/logic/science),https://arxiv.org/abs/2512.16144
+o1,n/d,n/d,n/d,n/d,n/d,n/d,n/d,n/d,n/d,,,o3 disclosed as 10x o1 RL (ratio only; absolutes unknown),https://epoch.ai
+o3,o1-base,n/d,n/d,n/d,n/d,n/d,n/d,disclosed_ratio(10x o1),n/d,,,10x o1 RL compute (disclosed ratio),https://epoch.ai
+GPT-5,n/d,n/d,n/d,n/d,n/d,n/d,n/d,,,,,RL a growing fraction; Epoch estimate,https://epochai.substack.com/p/notes-on-gpt-5-training-compute

@@ -7,25 +7,22 @@ from functools import lru_cache
 import pandas as pd
 
 from model import simulate
-from validation.presets import (areal_1_5b, areal_7b, areal_14b, areal_32b, intellect2, intellect3,
-                                primerl_paper)
+from validation.presets import published_runs
 from validation.solvers import solve_for_mfu
 from validation.uncertainty import mc_step_time
 from ..spec import Fig, register
+from ..sweep import cached
 
 
 @lru_cache(maxsize=1)
 def anchors():
     """(label, scenario, point prediction, published step time, Monte-Carlo summary) per anchor.
     Validation presets carry their own logged configs, so run-wide options do not apply here."""
-    presets = [("INTELLECT-2\nshort", intellect2("short")), ("INTELLECT-2\nlong", intellect2("long")),
-               ("INTELLECT-3", intellect3()), ("prime-rl", primerl_paper()), ("AReaL\n1.5B", areal_1_5b()),
-               ("AReaL\n7B", areal_7b()), ("AReaL\n14B", areal_14b()), ("AReaL\n32B", areal_32b())]
     out = []
-    for lab, sc in presets:
+    for lab, sc in published_runs():
         pub = (sc.published or {}).get("t_step")
         if pub:
-            out.append((lab, sc, simulate(sc).t_step, pub, mc_step_time(sc)))
+            out.append((lab, sc, simulate(sc).t_step, pub, cached(mc_step_time, sc)))
     return tuple(out)
 
 
@@ -64,6 +61,6 @@ def implied_mfu(opts):
                              flag="*" if d["flipped"] else ""))
     data = _cat(pd.DataFrame(rows), "anchor")
     return Fig("1c", "Trainer MFU the model needs to match each published step time", "bars", data, x="anchor",
-               log=False, fmt="plain", ylabel="implied trainer MFU", inner="flag",
+               log=False, fmt="share", ylabel="implied trainer MFU", inner="flag",
                caption="Ordered by FSDP shard degree: the decline is the signature of the unmodelled sharding "
-                       "penalty. prime-rl, whose MFU is published (0.385), recovers its own input.")
+                       "penalty. prime-rl, whose MFU is published (38.5%), recovers its own input.")

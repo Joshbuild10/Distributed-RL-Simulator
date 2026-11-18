@@ -7,7 +7,7 @@ validation -- everything about checking the analytic core against PUBLISHED runs
   validate.py   entry point -- reports every scenario, then the inverse-calibration summary
 
 The model itself lives at the repo root (specs.py, model.py); the feasibility study is
-feasibility_core.py (solver) + feasibility.py (tables/CLI).
+feasibility/ (solver) + analysis/ (figures, tables, CLI).
 
 Run:  python -m validation.validate        (from the repo root)
       python validation/validate.py        (also works -- validate.py puts the root on sys.path)

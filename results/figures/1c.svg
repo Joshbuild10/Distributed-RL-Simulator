@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-11-18T12:55:47.151587</dc:date>
+    <dc:date>2026-11-18T14:17:01.035570</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -30,10 +30,10 @@ z
   </g>
   <g id="axes_1">
    <g id="patch_2">
-    <path d="M 33.979084 181.67776 
-L 493.79976 181.67776 
+    <path d="M 38.715021 173.11676 
+L 493.79976 173.11676 
 L 493.79976 3.00024 
-L 33.979084 3.00024 
+L 38.715021 3.00024 
 z
 " style="fill: #ffffff"/>
    </g>
@@ -41,291 +41,293 @@ z
     <g id="xtick_1">
      <g id="line2d_1">
       <defs>
-       <path id="m27760cd912" d="M 0 0 
+       <path id="m9b09a2e4b4" d="M 0 0 
 L 0 3.5 
 " style="stroke: #5a6570; stroke-width: 0.6"/>
       </defs>
       <g>
-       <use xlink:href="#m27760cd912" x="65.201475" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="69.615837" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_1">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(52.16671 195.79676)">prime-rl</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(52.811475 204.35776)">8-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(56.581071 187.23576)">prime-rl</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(57.225837 195.79676)">8-shard</text>
      </g>
     </g>
     <g id="xtick_2">
      <g id="line2d_2">
       <g>
-       <use xlink:href="#m27760cd912" x="121.96946" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="125.799138" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_2">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(90.891648 195.79676)">INTELLECT-2 short</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(107.775319 204.35776)">32-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(103.914294 187.23576)">INTELLECT-2</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(117.276638 195.79676)">short</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(111.604997 204.35776)">32-shard</text>
      </g>
     </g>
     <g id="xtick_3">
      <g id="line2d_3">
       <g>
-       <use xlink:href="#m27760cd912" x="178.737445" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="181.982439" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_3">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(149.299164 195.79676)">INTELLECT-2 long</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(164.543304 204.35776)">32-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(160.097595 187.23576)">INTELLECT-2</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(175.09947 195.79676)">long</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(167.788298 204.35776)">32-shard</text>
      </g>
     </g>
     <g id="xtick_4">
      <g id="line2d_4">
       <g>
-       <use xlink:href="#m27760cd912" x="235.50543" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="238.16574" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_4">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(213.564805 195.79676)">INTELLECT-3</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(221.311289 204.35776)">32-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(216.225115 187.23576)">INTELLECT-3</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(223.971599 195.79676)">32-shard</text>
      </g>
     </g>
     <g id="xtick_5">
      <g id="line2d_5">
       <g>
-       <use xlink:href="#m27760cd912" x="292.273414" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="294.349041" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_5">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(274.684274 195.79676)">AReaL 1.5B</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(278.079274 204.35776)">32-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(276.759901 187.23576)">AReaL 1.5B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(280.154901 195.79676)">32-shard</text>
      </g>
     </g>
     <g id="xtick_6">
      <g id="line2d_6">
       <g>
-       <use xlink:href="#m27760cd912" x="349.041399" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="350.532342" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_6">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(333.937258 195.79676)">AReaL 7B</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(334.551399 204.35776)">48-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(335.428202 187.23576)">AReaL 7B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(336.042342 195.79676)">48-shard</text>
      </g>
     </g>
     <g id="xtick_7">
      <g id="line2d_7">
       <g>
-       <use xlink:href="#m27760cd912" x="405.809384" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="406.715643" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_7">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(388.956884 195.79676)">AReaL 14B</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(391.319384 204.35776)">64-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(389.863143 187.23576)">AReaL 14B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(392.225643 195.79676)">64-shard</text>
      </g>
     </g>
     <g id="xtick_8">
      <g id="line2d_8">
       <g>
-       <use xlink:href="#m27760cd912" x="462.577368" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m9b09a2e4b4" x="462.898944" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_8">
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(445.392368 195.79676)">AReaL 32B</text>
-      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(448.062759 204.35776)">96-shard</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(445.713944 187.23576)">AReaL 32B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(448.384335 195.79676)">96-shard</text>
      </g>
     </g>
    </g>
    <g id="matplotlib.axis_2">
     <g id="ytick_1">
      <g id="line2d_9">
-      <path d="M 33.979084 181.67776 
-L 493.79976 181.67776 
-" clip-path="url(#p621b6b01b5)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+      <path d="M 38.715021 173.11676 
+L 493.79976 173.11676 
+" clip-path="url(#p2aefab33ba)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
      <g id="line2d_10">
       <defs>
-       <path id="m87692f0f79" d="M 0 0 
+       <path id="m763ef44641" d="M 0 0 
 L -3.5 0 
 " style="stroke: #5a6570; stroke-width: 0.6"/>
       </defs>
       <g>
-       <use xlink:href="#m87692f0f79" x="33.979084" y="181.67776" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m763ef44641" x="38.715021" y="173.11676" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_9">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="26.979084" y="185.23726" transform="rotate(-0 26.979084 185.23726)">0</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="31.715021" y="176.67626" transform="rotate(-0 31.715021 176.67626)">0</text>
      </g>
     </g>
     <g id="ytick_2">
      <g id="line2d_11">
-      <path d="M 33.979084 143.038203 
-L 493.79976 143.038203 
-" clip-path="url(#p621b6b01b5)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+      <path d="M 38.715021 136.328545 
+L 493.79976 136.328545 
+" clip-path="url(#p2aefab33ba)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
      <g id="line2d_12">
       <g>
-       <use xlink:href="#m87692f0f79" x="33.979084" y="143.038203" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m763ef44641" x="38.715021" y="136.328545" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_10">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="26.979084" y="146.597703" transform="rotate(-0 26.979084 146.597703)">0.1</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="31.715021" y="139.888045" transform="rotate(-0 31.715021 139.888045)">10%</text>
      </g>
     </g>
     <g id="ytick_3">
      <g id="line2d_13">
-      <path d="M 33.979084 104.398646 
-L 493.79976 104.398646 
-" clip-path="url(#p621b6b01b5)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+      <path d="M 38.715021 99.54033 
+L 493.79976 99.54033 
+" clip-path="url(#p2aefab33ba)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
      <g id="line2d_14">
       <g>
-       <use xlink:href="#m87692f0f79" x="33.979084" y="104.398646" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m763ef44641" x="38.715021" y="99.54033" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_11">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="26.979084" y="107.958146" transform="rotate(-0 26.979084 107.958146)">0.2</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="31.715021" y="103.09983" transform="rotate(-0 31.715021 103.09983)">20%</text>
      </g>
     </g>
     <g id="ytick_4">
      <g id="line2d_15">
-      <path d="M 33.979084 65.759089 
-L 493.79976 65.759089 
-" clip-path="url(#p621b6b01b5)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+      <path d="M 38.715021 62.752116 
+L 493.79976 62.752116 
+" clip-path="url(#p2aefab33ba)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
      <g id="line2d_16">
       <g>
-       <use xlink:href="#m87692f0f79" x="33.979084" y="65.759089" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m763ef44641" x="38.715021" y="62.752116" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_12">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="26.979084" y="69.318589" transform="rotate(-0 26.979084 69.318589)">0.3</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="31.715021" y="66.311616" transform="rotate(-0 31.715021 66.311616)">30%</text>
      </g>
     </g>
     <g id="ytick_5">
      <g id="line2d_17">
-      <path d="M 33.979084 27.119532 
-L 493.79976 27.119532 
-" clip-path="url(#p621b6b01b5)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+      <path d="M 38.715021 25.963901 
+L 493.79976 25.963901 
+" clip-path="url(#p2aefab33ba)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
      <g id="line2d_18">
       <g>
-       <use xlink:href="#m87692f0f79" x="33.979084" y="27.119532" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m763ef44641" x="38.715021" y="25.963901" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_13">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="26.979084" y="30.679032" transform="rotate(-0 26.979084 30.679032)">0.4</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="31.715021" y="29.523401" transform="rotate(-0 31.715021 29.523401)">40%</text>
      </g>
     </g>
     <g id="text_14">
-     <text style="font-weight: 600; font-size: 8px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="11.13624" y="92.339" transform="rotate(-90 11.13624 92.339)">implied trainer MFU</text>
+     <text style="font-weight: 600; font-size: 8px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="11.13624" y="88.0585" transform="rotate(-90 11.13624 88.0585)">implied trainer MFU</text>
     </g>
    </g>
    <g id="patch_3">
-    <path d="M 44.765001 181.67776 
-L 85.63795 181.67776 
-L 85.63795 32.779827 
-L 44.765001 32.779827 
+    <path d="M 49.389848 173.11676 
+L 89.841825 173.11676 
+L 89.841825 31.352993 
+L 49.389848 31.352993 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_4">
-    <path d="M 101.532986 181.67776 
-L 142.405935 181.67776 
-L 142.405935 149.489137 
-L 101.532986 149.489137 
+    <path d="M 105.57315 173.11676 
+L 146.025126 173.11676 
+L 146.025126 142.470394 
+L 105.57315 142.470394 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_5">
-    <path d="M 158.30097 181.67776 
-L 199.173919 181.67776 
-L 199.173919 99.920316 
-L 158.30097 99.920316 
+    <path d="M 161.756451 173.11676 
+L 202.208427 173.11676 
+L 202.208427 95.276571 
+L 161.756451 95.276571 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_6">
-    <path d="M 215.068955 181.67776 
-L 255.941904 181.67776 
-L 255.941904 135.780622 
-L 215.068955 135.780622 
+    <path d="M 217.939752 173.11676 
+L 258.391728 173.11676 
+L 258.391728 129.418698 
+L 217.939752 129.418698 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_7">
-    <path d="M 271.83694 181.67776 
-L 312.709889 181.67776 
-L 312.709889 97.704844 
-L 271.83694 97.704844 
+    <path d="M 274.123053 173.11676 
+L 314.57503 173.11676 
+L 314.57503 93.16725 
+L 274.123053 93.16725 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_8">
-    <path d="M 328.604924 181.67776 
-L 369.477873 181.67776 
-L 369.477873 50.005433 
-L 328.604924 50.005433 
+    <path d="M 330.306354 173.11676 
+L 370.758331 173.11676 
+L 370.758331 47.753267 
+L 330.306354 47.753267 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_9">
-    <path d="M 385.372909 181.67776 
-L 426.245858 181.67776 
-L 426.245858 104.63194 
-L 385.372909 104.63194 
+    <path d="M 386.489655 173.11676 
+L 426.941632 173.11676 
+L 426.941632 99.762447 
+L 386.489655 99.762447 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_10">
-    <path d="M 442.140894 181.67776 
-L 483.013843 181.67776 
-L 483.013843 137.735897 
-L 442.140894 137.735897 
+    <path d="M 442.672956 173.11676 
+L 483.124933 173.11676 
+L 483.124933 131.280289 
+L 442.672956 131.280289 
 z
-" clip-path="url(#p621b6b01b5)" style="fill: #4d5d6c"/>
+" clip-path="url(#p2aefab33ba)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_11">
-    <path d="M 33.979084 181.67776 
-L 33.979084 3.00024 
+    <path d="M 38.715021 173.11676 
+L 38.715021 3.00024 
 " style="fill: none; stroke: #9aa3ab; stroke-width: 0.6; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="patch_12">
-    <path d="M 33.979084 181.67776 
-L 493.79976 181.67776 
+    <path d="M 38.715021 173.11676 
+L 493.79976 173.11676 
 " style="fill: none; stroke: #9aa3ab; stroke-width: 0.6; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="text_15">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="65.201475" y="30.126227" transform="rotate(-0 65.201475 30.126227)">0.385</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="69.615837" y="28.699393" transform="rotate(-0 69.615837 28.699393)">38.5%</text>
    </g>
    <g id="text_16">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="121.96946" y="146.835537" transform="rotate(-0 121.96946 146.835537)">0.0833</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="125.799138" y="139.816794" transform="rotate(-0 125.799138 139.816794)">8.33%</text>
    </g>
    <g id="text_17">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="178.737445" y="97.266716" transform="rotate(-0 178.737445 97.266716)">0.212</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="181.982439" y="92.622971" transform="rotate(-0 181.982439 92.622971)">21.2%</text>
    </g>
    <g id="text_18">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="235.50543" y="133.127022" transform="rotate(-0 235.50543 133.127022)">0.119</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="238.16574" y="126.765098" transform="rotate(-0 238.16574 126.765098)">11.9%</text>
    </g>
    <g id="text_19">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="292.273414" y="95.051244" transform="rotate(-0 292.273414 95.051244)">0.217</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="294.349041" y="90.51365" transform="rotate(-0 294.349041 90.51365)">21.7%</text>
    </g>
    <g id="text_20">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="349.041399" y="47.351833" transform="rotate(-0 349.041399 47.351833)">0.341</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="350.532342" y="45.099667" transform="rotate(-0 350.532342 45.099667)">34.1%</text>
    </g>
    <g id="text_21">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="405.809384" y="101.97834" transform="rotate(-0 405.809384 101.97834)">0.199</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="406.715643" y="97.108847" transform="rotate(-0 406.715643 97.108847)">19.9%</text>
    </g>
    <g id="text_22">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="462.577368" y="135.082297" transform="rotate(-0 462.577368 135.082297)">0.114</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="462.898944" y="128.626689" transform="rotate(-0 462.898944 128.626689)">11.4%</text>
    </g>
    <g id="text_23">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #ffffff" transform="translate(124.07806 166.813167) rotate(-90)">*</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(127.907738 159.023296) rotate(-90)">*</text>
    </g>
    <g id="text_24">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #ffffff" transform="translate(180.846045 142.028757) rotate(-90)">*</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(184.091039 135.426384) rotate(-90)">*</text>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="p621b6b01b5">
-   <rect x="33.979084" y="3.00024" width="459.820676" height="178.67752"/>
+  <clipPath id="p2aefab33ba">
+   <rect x="38.715021" y="3.00024" width="455.084739" height="170.11652"/>
   </clipPath>
  </defs>
 </svg>

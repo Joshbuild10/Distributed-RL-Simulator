@@ -3,3 +3,4 @@
 pandas>=2.2
 matplotlib>=3.9
 streamlit>=1.40
+pytest>=8              # tests only
