@@ -13,6 +13,7 @@ plus metric-specific columns (wall_d, bottleneck, eta, ...) that tables use.
 """
 import itertools
 import math
+import threading
 
 import pandas as pd
 
@@ -25,24 +26,32 @@ DAY = 86400
 NAN = float("nan")
 _cache = None                                   # loaded from disk on first use (cache.py)
 _new = {}
+_lock = threading.Lock()                        # the explorer runs scripts on several threads at once
 
 
 def cached(fn, cfg, *args):
     """fn(cfg, *args) computed once per (fn, config, args), across builds too. FeasConfig's repr is a
-    complete, deterministic description of it, so it doubles as the key."""
+    complete, deterministic description of it, so it doubles as the key. Thread-safe; two threads
+    missing the same key may both compute it, which is harmless (results are deterministic)."""
     global _cache
-    if _cache is None:
-        _cache = cache.load_results()
     key = (fn.__name__, repr(cfg), args)
-    if key not in _cache:
-        _cache[key] = _new[key] = fn(cfg, *args)
-    return _cache[key]
+    with _lock:
+        if _cache is None:
+            _cache = cache.load_results()
+        if key in _cache:
+            return _cache[key]
+    val = fn(cfg, *args)                         # outside the lock: solver calls can take seconds
+    with _lock:
+        _cache[key] = _new[key] = val
+    return val
 
 
 def flush():
     """Persist the results computed since the last flush."""
-    cache.save_results(_new)
-    _new.clear()
+    global _new
+    with _lock:
+        batch, _new = _new, {}                   # swap, so other threads never see it mid-write
+    cache.save_results(batch)
 
 
 def sweep(axes, point_fn):

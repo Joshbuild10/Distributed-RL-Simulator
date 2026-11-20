@@ -11,8 +11,8 @@ import numbers
 import textwrap
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
@@ -315,15 +315,25 @@ def _height(fig):
     return 2.35 if fig.kind == "multiples" else 2.9
 
 
+def _figure(size):
+    """A figure on its own Agg canvas: no pyplot state (thread-safe under Streamlit), and a real
+    renderer whatever backend the host process has selected."""
+    f = Figure(figsize=size, layout="constrained")
+    FigureCanvasAgg(f)
+    return f
+
+
 def _draw(fig, theme, title, width, scale=1.0):
     """scale > 1 enlarges all text relative to the chart (a poster) by drawing on a smaller canvas."""
     t = THEMES[theme]
     size = (width / scale, _height(fig) / scale)
     if fig.kind == "multiples":
-        f, axes = plt.subplots(1, len(fig.categories()), figsize=size, layout="constrained")
+        f = _figure(size)
+        axes = f.subplots(1, len(fig.categories()))
         _multiples(fig, axes, t, f)
     else:
-        f, ax = plt.subplots(figsize=size, layout="constrained")
+        f = _figure(size)
+        ax = f.subplots()
         _KINDS[fig.kind](fig, ax, t)
     if title:
         f.suptitle(f"{fig.id}. {fig.title}", x=0.005, ha="left", fontweight="bold", fontsize=9.5, color=t["fg"])
@@ -337,19 +347,17 @@ def _draw(fig, theme, title, width, scale=1.0):
 
 def render(fig, fmt="svg", theme="light", title=True, width=WIDTH_IN, dpi=300):
     """One figure as bytes in `fmt` (svg | pdf | png)."""
-    with plt.rc_context(rc(theme)):
+    with matplotlib.rc_context(rc(theme)):
         f = _draw(fig, theme, title, width)
         buf = io.BytesIO()
         f.savefig(buf, format=fmt, dpi=dpi)
-        plt.close(f)
     return buf.getvalue()
 
 
 def save(fig, stem, theme="light", width=WIDTH_IN, scale=1.0):
     """stem.pdf / .svg / .png for the paper: no title (it belongs in the caption), drawn once."""
-    with plt.rc_context(rc(theme)):
+    with matplotlib.rc_context(rc(theme)):
         f = _draw(fig, theme, False, width, scale)
         for ext in ("pdf", "svg"):
             f.savefig(f"{stem}.{ext}")
         f.savefig(f"{stem}.png", dpi=300 * scale)
-        plt.close(f)

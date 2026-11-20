@@ -81,7 +81,9 @@ n_inf_gpus))` from `model.py` gives the full per-stage breakdown of one step.
 ```
 
 `p_active` is decoder-layer parameters only (no embedding or head); for MoE, the active experts plus
-shared layers. It then appears in the explorer, `--set model=Qwen3-32B`, and the cross-model charts
+shared layers. For multi-head latent attention, add `attention="mla"` and its four widths
+(DeepSeek-V3: `kv_lora_rank=512, qk_rope_dim=64, qk_nope_dim=128, v_head_dim=128`; see the
+`"DeepSeek-V3"` entry). MLA caches only the latent and the RoPE key, decodes absorbed and trains naive. It then appears in the explorer, `--set model=Qwen3-32B`, and the cross-model charts
 (optionally a short axis label in `MSHORT`, `analysis/figures/feasibility.py`).
 
 ## Add a GPU family
@@ -150,9 +152,11 @@ Seconds: solver invariants on a sample of configs, the 13 golden headline number
 python -m pytest --full
 ```
 
-About 2 minutes: the 864-point invariant gate with penalties off, async and relay, a check that
-every `results/tables/*.csv` matches what the code produces now, and the explorer run headlessly
-(default settings and a model that misses most windows).
+About 5 minutes: the 864-point invariant gate with penalties off, async and relay, a check that
+every `results/tables/*.csv` matches what the code produces now, the explorer run headlessly
+(default settings and a model that misses most windows), and every figure rendered under five
+contrasting configs with no overlapping or off-figure text (`tests/test_render.py`; add a config there
+when a new option could change chart layout).
 
 - **A golden number moved on purpose?** Re-record with `python -m tests.invariants --write`, and say
   why in the commit.

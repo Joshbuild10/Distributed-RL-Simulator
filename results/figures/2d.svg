@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-11-18T14:17:01.665749</dc:date>
+    <dc:date>2026-11-18T19:44:31.070981</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -41,436 +41,473 @@ z
     <g id="xtick_1">
      <g id="line2d_1">
       <defs>
-       <path id="m04910329da" d="M 0 0 
+       <path id="m8d3d578825" d="M 0 0 
 L 0 3.5 
 " style="stroke: #5a6570; stroke-width: 0.6"/>
       </defs>
       <g>
-       <use xlink:href="#m04910329da" x="74.882239" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="70.539488" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_1">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="74.882239" y="204.35776" transform="rotate(-0 74.882239 204.35776)">L3-8B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="70.539488" y="204.35776" transform="rotate(-0 70.539488 204.35776)">L3-8B</text>
      </g>
     </g>
     <g id="xtick_2">
      <g id="line2d_2">
       <g>
-       <use xlink:href="#m04910329da" x="138.839113" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="126.600452" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_2">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="138.839113" y="204.35776" transform="rotate(-0 138.839113 204.35776)">L3-70B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="126.600452" y="204.35776" transform="rotate(-0 126.600452 204.35776)">L3-70B</text>
      </g>
     </g>
     <g id="xtick_3">
      <g id="line2d_3">
       <g>
-       <use xlink:href="#m04910329da" x="202.795986" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="182.661415" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_3">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="202.795986" y="204.35776" transform="rotate(-0 202.795986 204.35776)">L3-405B</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="182.661415" y="204.35776" transform="rotate(-0 182.661415 204.35776)">L3-405B</text>
      </g>
     </g>
     <g id="xtick_4">
      <g id="line2d_4">
       <g>
-       <use xlink:href="#m04910329da" x="266.752859" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="238.722378" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_4">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="266.752859" y="204.35776" transform="rotate(-0 266.752859 204.35776)">Q3-30B/A3</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="238.722378" y="204.35776" transform="rotate(-0 238.722378 204.35776)">Q3-30B/A3</text>
      </g>
     </g>
     <g id="xtick_5">
      <g id="line2d_5">
       <g>
-       <use xlink:href="#m04910329da" x="330.709733" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="294.783341" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_5">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="330.709733" y="204.35776" transform="rotate(-0 330.709733 204.35776)">Q3-235B/A22</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="294.783341" y="204.35776" transform="rotate(-0 294.783341 204.35776)">Q3-235B/A22</text>
      </g>
     </g>
     <g id="xtick_6">
      <g id="line2d_6">
       <g>
-       <use xlink:href="#m04910329da" x="394.666606" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="350.844304" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_6">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="394.666606" y="204.35776" transform="rotate(-0 394.666606 204.35776)">K3-2.4T</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="350.844304" y="204.35776" transform="rotate(-0 350.844304 204.35776)">K3-2.4T</text>
      </g>
     </g>
     <g id="xtick_7">
      <g id="line2d_7">
       <g>
-       <use xlink:href="#m04910329da" x="458.62348" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#m8d3d578825" x="406.905267" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_7">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="458.62348" y="204.35776" transform="rotate(-0 458.62348 204.35776)">L4-402B/A17</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="406.905267" y="204.35776" transform="rotate(-0 406.905267 204.35776)">DS-V3/A37</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#m8d3d578825" x="462.96623" y="190.23876" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="462.96623" y="204.35776" transform="rotate(-0 462.96623 204.35776)">L4-402B/A17</text>
      </g>
     </g>
    </g>
    <g id="matplotlib.axis_2">
     <g id="ytick_1">
-     <g id="line2d_8">
-      <path d="M 39.705959 167.84134 
-L 493.79976 167.84134 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
-     </g>
      <g id="line2d_9">
+      <path d="M 39.705959 155.876853 
+L 493.79976 155.876853 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10">
       <defs>
-       <path id="md9986c9bbc" d="M 0 0 
+       <path id="md71963a10a" d="M 0 0 
 L -3.5 0 
 " style="stroke: #5a6570; stroke-width: 0.6"/>
       </defs>
       <g>
-       <use xlink:href="#md9986c9bbc" x="39.705959" y="167.84134" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
-      </g>
-     </g>
-     <g id="text_8">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="171.40084" transform="rotate(-0 32.705959 171.40084)">5k</text>
-     </g>
-    </g>
-    <g id="ytick_2">
-     <g id="line2d_10">
-      <path d="M 39.705959 137.796012 
-L 493.79976 137.796012 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
-     </g>
-     <g id="line2d_11">
-      <g>
-       <use xlink:href="#md9986c9bbc" x="39.705959" y="137.796012" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#md71963a10a" x="39.705959" y="155.876853" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_9">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="141.355512" transform="rotate(-0 32.705959 141.355512)">10k</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="159.436353" transform="rotate(-0 32.705959 159.436353)">5k</text>
      </g>
     </g>
-    <g id="ytick_3">
-     <g id="line2d_12">
-      <path d="M 39.705959 107.750685 
-L 493.79976 107.750685 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+    <g id="ytick_2">
+     <g id="line2d_11">
+      <path d="M 39.705959 128.239595 
+L 493.79976 128.239595 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
-     <g id="line2d_13">
+     <g id="line2d_12">
       <g>
-       <use xlink:href="#md9986c9bbc" x="39.705959" y="107.750685" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#md71963a10a" x="39.705959" y="128.239595" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_10">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="111.310185" transform="rotate(-0 32.705959 111.310185)">20k</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="131.799095" transform="rotate(-0 32.705959 131.799095)">10k</text>
      </g>
     </g>
-    <g id="ytick_4">
-     <g id="line2d_14">
-      <path d="M 39.705959 68.032922 
-L 493.79976 68.032922 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+    <g id="ytick_3">
+     <g id="line2d_13">
+      <path d="M 39.705959 100.602337 
+L 493.79976 100.602337 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
-     <g id="line2d_15">
+     <g id="line2d_14">
       <g>
-       <use xlink:href="#md9986c9bbc" x="39.705959" y="68.032922" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#md71963a10a" x="39.705959" y="100.602337" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_11">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="71.592422" transform="rotate(-0 32.705959 71.592422)">50k</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="104.161837" transform="rotate(-0 32.705959 104.161837)">20k</text>
      </g>
     </g>
-    <g id="ytick_5">
-     <g id="line2d_16">
-      <path d="M 39.705959 37.987594 
-L 493.79976 37.987594 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+    <g id="ytick_4">
+     <g id="line2d_15">
+      <path d="M 39.705959 64.06787 
+L 493.79976 64.06787 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
      </g>
-     <g id="line2d_17">
+     <g id="line2d_16">
       <g>
-       <use xlink:href="#md9986c9bbc" x="39.705959" y="37.987594" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+       <use xlink:href="#md71963a10a" x="39.705959" y="64.06787" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
       </g>
      </g>
      <g id="text_12">
-      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="41.547094" transform="rotate(-0 32.705959 41.547094)">100k</text>
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="67.62737" transform="rotate(-0 32.705959 67.62737)">50k</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_17">
+      <path d="M 39.705959 36.430612 
+L 493.79976 36.430612 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke: #e6e8eb; stroke-width: 0.6; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_18">
+      <g>
+       <use xlink:href="#md71963a10a" x="39.705959" y="36.430612" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.6"/>
+      </g>
+     </g>
+     <g id="text_13">
+      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: end; fill: #1e2329" x="32.705959" y="39.990112" transform="rotate(-0 32.705959 39.990112)">100k</text>
      </g>
     </g>
     <g id="ytick_6">
-     <g id="line2d_18">
+     <g id="line2d_19">
       <defs>
-       <path id="m52402e905a" d="M 0 0 
+       <path id="m236984b551" d="M 0 0 
 L -2 0 
 " style="stroke: #5a6570; stroke-width: 0.4"/>
       </defs>
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="189.983713" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="176.244561" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_7">
-     <g id="line2d_19">
+     <g id="line2d_20">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="177.513775" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="164.774063" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_8">
-     <g id="line2d_20">
+     <g id="line2d_21">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="159.938385" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="148.607303" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_9">
-     <g id="line2d_21">
+     <g id="line2d_22">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="153.256532" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="142.460987" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_10">
-     <g id="line2d_22">
+     <g id="line2d_23">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="147.468448" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="137.136805" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_11">
-     <g id="line2d_23">
+     <g id="line2d_24">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="142.362995" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="132.440544" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_12">
-     <g id="line2d_24">
+     <g id="line2d_25">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="90.175295" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="84.435578" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_13">
-     <g id="line2d_25">
+     <g id="line2d_26">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="77.705357" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="72.96508" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_14">
-     <g id="line2d_26">
+     <g id="line2d_27">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="60.129967" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="56.79832" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_15">
-     <g id="line2d_27">
+     <g id="line2d_28">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="53.448114" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="50.652004" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_16">
-     <g id="line2d_28">
+     <g id="line2d_29">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="47.660029" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="45.327822" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
     <g id="ytick_17">
-     <g id="line2d_29">
+     <g id="line2d_30">
       <g>
-       <use xlink:href="#m52402e905a" x="39.705959" y="42.554577" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
+       <use xlink:href="#m236984b551" x="39.705959" y="40.631561" style="fill: #5a6570; stroke: #5a6570; stroke-width: 0.4"/>
       </g>
      </g>
     </g>
-    <g id="text_13">
+    <g id="text_14">
      <text style="font-weight: 600; font-size: 8px; font-family: 'Commissioner'; text-anchor: middle; fill: #1e2329" x="11.13624" y="104.4" transform="rotate(-90 11.13624 104.4)">GPUs to finish in window</text>
     </g>
    </g>
    <g id="patch_3">
-    <path d="M 50.578627 100345.44824 
-L 73.603102 100345.44824 
-L 73.603102 78.651896 
-L 50.578627 78.651896 
+    <path d="M 49.236322 92304.458328 
+L 69.418269 92304.458328 
+L 69.418269 73.835755 
+L 49.236322 73.835755 
 z
-" clip-path="url(#pe50285de61)" style="fill: #4d5d6c"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_4">
-    <path d="M 114.535501 100345.44824 
-L 137.559975 100345.44824 
-L 137.559975 114.047031 
-L 114.535501 114.047031 
+    <path d="M 105.297286 92304.458328 
+L 125.479232 92304.458328 
+L 125.479232 106.394045 
+L 105.297286 106.394045 
 z
-" clip-path="url(#pe50285de61)" style="fill: #4d5d6c"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_5">
-    <path d="M 178.492374 100345.44824 
-L 201.516848 100345.44824 
-L 201.516848 107.062635 
-L 178.492374 107.062635 
+    <path d="M 161.358249 92304.458328 
+L 181.540195 92304.458328 
+L 181.540195 99.969433 
+L 161.358249 99.969433 
 z
-" clip-path="url(#pe50285de61)" style="fill: #4d5d6c"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_6">
-    <path d="M 242.449247 100345.44824 
-L 265.473722 100345.44824 
-L 265.473722 82.156904 
-L 242.449247 82.156904 
+    <path d="M 217.419212 92304.458328 
+L 237.601159 92304.458328 
+L 237.601159 77.059844 
+L 217.419212 77.059844 
 z
-" clip-path="url(#pe50285de61)" style="fill: #4d5d6c"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #4d5d6c"/>
    </g>
    <g id="patch_7">
-    <path d="M 329.430595 209.8 
-L 329.430595 119.509824 
-L 306.406121 119.509824 
-L 306.406121 209.8 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #4d5d6c; stroke-width: 0.8; stroke-linejoin: miter"/>
+    <path d="M 293.662122 209.8 
+L 293.662122 111.419007 
+L 273.480175 111.419007 
+L 273.480175 209.8 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #4d5d6c; stroke-width: 0.8; stroke-linejoin: miter"/>
    </g>
    <g id="patch_8">
-    <path d="M 457.344342 209.8 
-L 457.344342 150.520997 
-L 434.319868 150.520997 
-L 434.319868 209.8 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #4d5d6c; stroke-width: 0.8; stroke-linejoin: miter"/>
+    <path d="M 405.784048 209.8 
+L 405.784048 145.538702 
+L 385.602101 145.538702 
+L 385.602101 209.8 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #4d5d6c; stroke-width: 0.8; stroke-linejoin: miter"/>
    </g>
    <g id="patch_9">
-    <path d="M 76.161377 100345.44824 
-L 99.185851 100345.44824 
-L 99.185851 112.58822 
-L 76.161377 112.58822 
-z
-" clip-path="url(#pe50285de61)" style="fill: #d7192d"/>
+    <path d="M 461.845011 209.8 
+L 461.845011 139.944699 
+L 441.663064 139.944699 
+L 441.663064 209.8 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #4d5d6c; stroke-width: 0.8; stroke-linejoin: miter"/>
    </g>
    <g id="patch_10">
-    <path d="M 140.11825 100345.44824 
-L 163.142724 100345.44824 
-L 163.142724 143.97223 
-L 140.11825 143.97223 
+    <path d="M 71.660708 92304.458328 
+L 91.842654 92304.458328 
+L 91.842654 105.052154 
+L 71.660708 105.052154 
 z
-" clip-path="url(#pe50285de61)" style="fill: #d7192d"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
    </g>
    <g id="patch_11">
-    <path d="M 204.075123 100345.44824 
-L 227.099598 100345.44824 
-L 227.099598 136.835772 
-L 204.075123 136.835772 
+    <path d="M 127.721671 92304.458328 
+L 147.903618 92304.458328 
+L 147.903618 133.920802 
+L 127.721671 133.920802 
 z
-" clip-path="url(#pe50285de61)" style="fill: #d7192d"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
    </g>
    <g id="patch_12">
-    <path d="M 268.031997 100345.44824 
-L 291.056471 100345.44824 
-L 291.056471 114.530901 
-L 268.031997 114.530901 
+    <path d="M 183.782634 92304.458328 
+L 203.964581 92304.458328 
+L 203.964581 127.356316 
+L 183.782634 127.356316 
 z
-" clip-path="url(#pe50285de61)" style="fill: #d7192d"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
    </g>
    <g id="patch_13">
-    <path d="M 331.98887 100345.44824 
-L 355.013345 100345.44824 
-L 355.013345 141.410292 
-L 331.98887 141.410292 
+    <path d="M 239.843597 92304.458328 
+L 260.025544 92304.458328 
+L 260.025544 106.839134 
+L 239.843597 106.839134 
 z
-" clip-path="url(#pe50285de61)" style="fill: #d7192d"/>
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
    </g>
    <g id="patch_14">
-    <path d="M 482.927092 209.8 
-L 482.927092 150.520997 
-L 459.902617 150.520997 
-L 459.902617 209.8 
-" clip-path="url(#pe50285de61)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #d7192d; stroke-width: 0.8; stroke-linejoin: miter"/>
+    <path d="M 295.90456 92304.458328 
+L 316.086507 92304.458328 
+L 316.086507 131.564198 
+L 295.90456 131.564198 
+z
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
    </g>
    <g id="patch_15">
+    <path d="M 408.026486 92304.458328 
+L 428.208433 92304.458328 
+L 428.208433 153.704293 
+L 408.026486 153.704293 
+z
+" clip-path="url(#p3d13efd63a)" style="fill: #d7192d"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 484.269396 209.8 
+L 484.269396 139.944699 
+L 464.08745 139.944699 
+L 464.08745 209.8 
+" clip-path="url(#p3d13efd63a)" style="fill: none; stroke-dasharray: 1.6,1.2; stroke-dashoffset: 0; stroke: #d7192d; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_17">
     <path d="M 39.705959 190.23876 
 L 39.705959 18.56124 
 " style="fill: none; stroke: #9aa3ab; stroke-width: 0.6; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
-   <g id="patch_16">
+   <g id="patch_18">
     <path d="M 39.705959 190.23876 
 L 493.79976 190.23876 
 " style="fill: none; stroke: #9aa3ab; stroke-width: 0.6; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
-   <g id="text_14">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="62.090864" y="75.998296" transform="rotate(-0 62.090864 75.998296)">39.1k</text>
-   </g>
    <g id="text_15">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="126.047738" y="111.393431" transform="rotate(-0 126.047738 111.393431)">17.3k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="59.327296" y="71.182155" transform="rotate(-0 59.327296 71.182155)">39.1k</text>
    </g>
    <g id="text_16">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="190.004611" y="104.409035" transform="rotate(-0 190.004611 104.409035)">20.3k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="115.388259" y="103.740445" transform="rotate(-0 115.388259 103.740445)">17.3k</text>
    </g>
    <g id="text_17">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="253.961485" y="79.503304" transform="rotate(-0 253.961485 79.503304)">36.1k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="171.449222" y="97.315833" transform="rotate(-0 171.449222 97.315833)">20.3k</text>
    </g>
    <g id="text_18">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="317.918358" y="116.856224" transform="rotate(-0 317.918358 116.856224)">15.2k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="227.510185" y="74.406244" transform="rotate(-0 227.510185 74.406244)">36.1k</text>
    </g>
    <g id="text_19">
-    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(320.189158 135.573699) rotate(-90)">108 d</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="283.571148" y="108.765407" transform="rotate(-0 283.571148 108.765407)">15.2k</text>
    </g>
    <g id="text_20">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; fill: #5a6570" transform="translate(384.146032 187.23876) rotate(-90)">no-fit</text>
+    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(285.841948 127.482882) rotate(-90)">108 d</text>
    </g>
    <g id="text_21">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="445.832105" y="147.867397" transform="rotate(-0 445.832105 147.867397)">7.46k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; fill: #5a6570" transform="translate(341.902911 187.23876) rotate(-90)">no-fit</text>
    </g>
    <g id="text_22">
-    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(448.102905 165.890997) rotate(-90)">331 d</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="395.693075" y="142.885102" transform="rotate(-0 395.693075 142.885102)">6.48k</text>
    </g>
    <g id="text_23">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="87.673614" y="109.93462" transform="rotate(-0 87.673614 109.93462)">17.9k</text>
+    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(397.963875 161.308577) rotate(-90)">146 d</text>
    </g>
    <g id="text_24">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="151.630487" y="141.31863" transform="rotate(-0 151.630487 141.31863)">8.67k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="451.754038" y="137.291099" transform="rotate(-0 451.754038 137.291099)">7.46k</text>
    </g>
    <g id="text_25">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="215.587361" y="134.182172" transform="rotate(-0 215.587361 134.182172)">10.2k</text>
+    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(454.024838 155.314699) rotate(-90)">331 d</text>
    </g>
    <g id="text_26">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="279.544234" y="111.877301" transform="rotate(-0 279.544234 111.877301)">17.1k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="81.751681" y="102.398554" transform="rotate(-0 81.751681 102.398554)">17.9k</text>
    </g>
    <g id="text_27">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="343.501107" y="138.756692" transform="rotate(-0 343.501107 138.756692)">9.2k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="137.812644" y="131.267202" transform="rotate(-0 137.812644 131.267202)">8.67k</text>
    </g>
    <g id="text_28">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; fill: #5a6570" transform="translate(409.728781 187.23876) rotate(-90)">no-fit</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="193.873607" y="124.702716" transform="rotate(-0 193.873607 124.702716)">10.2k</text>
    </g>
    <g id="text_29">
-    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="471.414854" y="147.867397" transform="rotate(-0 471.414854 147.867397)">7.46k</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="249.93457" y="104.185534" transform="rotate(-0 249.93457 104.185534)">17.1k</text>
    </g>
    <g id="text_30">
-    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(473.685654 165.890997) rotate(-90)">331 d</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="305.995534" y="128.910598" transform="rotate(-0 305.995534 128.910598)">9.2k</text>
    </g>
    <g id="text_31">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(64.199464 146.443515) rotate(-90)">161k steps</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; fill: #5a6570" transform="translate(364.327297 187.23876) rotate(-90)">no-fit</text>
    </g>
    <g id="text_32">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(128.156338 165.091302) rotate(-90)">19.5k steps</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="418.11746" y="151.050693" transform="rotate(-0 418.11746 151.050693)">5.28k</text>
    </g>
    <g id="text_33">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(192.113211 162.009822) rotate(-90)">3.68k steps</text>
+    <text style="font-size: 5.6px; font-family: 'Commissioner'; text-anchor: middle; fill: #5a6570" x="474.178423" y="137.291099" transform="rotate(-0 474.178423 137.291099)">7.46k</text>
    </g>
    <g id="text_34">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(256.070085 148.662801) rotate(-90)">198k steps</text>
+    <text style="font-weight: 700; font-size: 5.6px; font-family: 'Commissioner'; fill: #1e2329" transform="translate(476.449223 155.314699) rotate(-90)">331 d</text>
    </g>
    <g id="text_35">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(89.782214 163.411678) rotate(-90)">161k steps</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(61.435896 144.035445) rotate(-90)">161k steps</text>
    </g>
    <g id="text_36">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(153.739087 180.053901) rotate(-90)">19.5k steps</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(117.496859 161.264809) rotate(-90)">19.5k steps</text>
    </g>
    <g id="text_37">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(217.695961 176.896391) rotate(-90)">3.68k steps</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(173.557822 158.463222) rotate(-90)">3.68k steps</text>
    </g>
    <g id="text_38">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(281.652834 164.849799) rotate(-90)">198k steps</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #fbfbfc" transform="translate(229.618785 146.114271) rotate(-90)">198k steps</text>
    </g>
    <g id="text_39">
-    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(345.609707 179.183651) rotate(-90)">39.8k steps</text>
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(83.860281 159.643645) rotate(-90)">161k steps</text>
+   </g>
+   <g id="text_40">
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(139.921244 175.028187) rotate(-90)">19.5k steps</text>
+   </g>
+   <g id="text_41">
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(195.982207 172.156663) rotate(-90)">3.68k steps</text>
+   </g>
+   <g id="text_42">
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(252.04317 161.003916) rotate(-90)">198k steps</text>
+   </g>
+   <g id="text_43">
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(308.104134 174.260604) rotate(-90)">39.8k steps</text>
+   </g>
+   <g id="text_44">
+    <text style="font-size: 5.2px; font-family: 'Commissioner'; fill: #111417" transform="translate(420.22606 184.958933) rotate(-90)">18.8k steps</text>
    </g>
    <g id="legend_1">
-    <g id="patch_17">
+    <g id="patch_19">
      <path d="M 43.905959 12.91924 
 L 51.605959 12.91924 
 L 51.605959 8.01924 
@@ -478,10 +515,10 @@ L 43.905959 8.01924
 z
 " style="fill: #4d5d6c; stroke: #4d5d6c; stroke-linejoin: miter"/>
     </g>
-    <g id="text_40">
+    <g id="text_45">
      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: start; fill: #1e2329" x="57.205959" y="12.91924" transform="rotate(-0 57.205959 12.91924)">90 days</text>
     </g>
-    <g id="patch_18">
+    <g id="patch_20">
      <path d="M 89.455178 12.91924 
 L 97.155178 12.91924 
 L 97.155178 8.01924 
@@ -489,14 +526,14 @@ L 89.455178 8.01924
 z
 " style="fill: #d7192d; stroke: #d7192d; stroke-linejoin: miter"/>
     </g>
-    <g id="text_41">
+    <g id="text_46">
      <text style="font-size: 7px; font-family: 'Commissioner'; text-anchor: start; fill: #1e2329" x="102.755178" y="12.91924" transform="rotate(-0 102.755178 12.91924)">180 days</text>
     </g>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="pe50285de61">
+  <clipPath id="p3d13efd63a">
    <rect x="39.705959" y="18.56124" width="454.093801" height="171.67752"/>
   </clipPath>
  </defs>

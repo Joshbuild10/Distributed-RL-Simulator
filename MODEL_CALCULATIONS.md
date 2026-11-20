@@ -18,7 +18,9 @@ Units throughout: time in **seconds**, memory and traffic in **bytes**, compute 
 | `P_head` | Unembedding params = `D * vocab` | `p_head` |
 | `L`, `D` | Layers; hidden dimension | `n_layers`, `d_model` |
 | `N_q`, `N_kv`, `H` | Query heads; KV heads; head dimension | `n_q_heads`, `n_kv_heads`, `head_dim` |
-| `A` | Attention coefficient `N_q * H * L` | `attn_coef` |
+| `A`, `A_dec` | Attention coefficient `N_q * L * D_att / 2`, for prefill/training and for decode (`= N_q * H * L` for MHA) | `attn_coef`, `attn_coef_decode` |
+| `D_att` | Per-head score + value width: `2H` for MHA/GQA; MLA `D_k + D_r + D_v` (naive, prefill/training) and `2 r_kv + D_r` (absorbed, decode) | `attn_dim`, `attn_dim_decode` |
+| `r_kv`, `D_r`, `D_k`, `D_v` | MLA: cached latent width; shared RoPE key width; per-head key and value widths | `kv_lora_rank`, `qk_rope_dim`, `qk_nope_dim`, `v_head_dim` |
 | `P` | Mean prompt (prefill) length | `prompt_len` |
 | `R` | Mean response length, `E[R]` | `response_len_mean` |
 | `E[R^2]` | Second moment, `E[R]^2 * (1 + cv^2)` | `er2` |
@@ -109,7 +111,8 @@ F_grp           = tp * F_inf * MFU_inf * tput_mult_inf
 
 **KV cache.**
 ```
-KV_per-tok    = b_kv * 2 * L * N_kv * H
+KV_per-tok    = b_kv * L * 2 * N_kv * H                        (MHA/GQA)
+             = b_kv * L * (r_kv + D_r)                         (MLA: one latent + RoPE key per token per layer)
 Mem_KV_peak   = KV_per-tok * R_max                             (R_max = max_response_len, else P + R)
 Vol_KV_total  = KV_per-tok * (P * R + E[R^2] / 2)              (KV bytes read over one sequence's decode)
 seq-parallel  = floor(Mem_free / Mem_KV_peak)                  (sequences one group holds at once)
@@ -137,10 +140,16 @@ seqs_per_wave  = B_gen / (active_groups * n_waves)             (mean fill, not s
 **Compute per sequence.**
 ```
 C_prefill = 2 * P_active * P + c_causal * P^2 * A              (divided by G under prefix caching)
-C_decode  = 2 * P_active * R + 4 * A * (P * R + E[R^2] / 2)
+C_decode  = 2 * P_active * R + 4 * A_dec * (P * R + E[R^2] / 2)
 ```
-- Decode attention sums `4 * A * s` over positions `s = P .. P + R`; the causal halving is already in
+- Decode attention sums `4 * A_dec * s` over positions `s = P .. P + R`; the causal halving is already in
   that sum, so the coefficient is 4, not `c_causal`.
+- MLA (`attention = "mla"`) runs decode *absorbed*: scores and values are taken against the `r_kv`-wide
+  latent, so `A_dec = L * N_q * (2 r_kv + D_r) / 2` -- `4 A_dec = C_a` in the R1-Zero compute post
+  (16,990,208 for DeepSeek-V3). Prefill and training run *naive*, `A = L * N_q * (D_k + D_r + D_v) / 2`
+  (`4 A = C_n`, 4,997,120). For DeepSeek-V3 the cache is 57x smaller than full MHA's (3.6x smaller
+  than 8-head GQA's), but decode attention does 4.25x the FLOPs of MHA, so at long context MLA decode
+  turns compute-bound where GQA is memory-bound.
 
 **Time per wave.**
 ```
@@ -148,7 +157,7 @@ Mem_weights-decode = b_weights_inf * min(P_active + P_head, P_total)
 T_decode_mem  = Mem_weights-decode * R / W_grp                 (stream the weights once per token)
 T_decode_comp = C_decode * seqs_per_wave / F_grp
 T_decode      = max(T_decode_comp, T_decode_mem)
-kv_shard      = min(tp, N_kv * max(1, seqs_per_wave))
+kv_shard      = min(tp, N_kv * max(1, seqs_per_wave))          (N_kv -> 1 for MLA: the latent is shared by all heads)
 T_inf-attention = Vol_KV_total * seqs_per_wave / (W_inf * η_bw * kv_shard)
 T_prefill     = C_prefill * seqs_per_wave / F_grp
 T_env         = environment latency per wave

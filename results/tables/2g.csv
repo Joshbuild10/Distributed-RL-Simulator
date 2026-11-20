@@ -24,6 +24,11 @@ Qwen3-235B-A22B,o1,50.945847005822074,,,ok,rollout+verify
 Qwen3-235B-A22B,o3,407.3961731862011,,,ok,rollout+verify
 Qwen3-235B-A22B,Grok-3-Reasoning,9646.198118906534,,,ok,rollout+verify
 Qwen3-235B-A22B,Grok-4,97352.75422105708,,,ok,rollout+verify
+DeepSeek-V3,DeepSeek-R1-Zero,70.33227669442334,,,ok,rollout+verify
+DeepSeek-V3,o1,70.33227669442334,,,ok,rollout+verify
+DeepSeek-V3,o3,550.4035401503007,,,ok,update
+DeepSeek-V3,Grok-3-Reasoning,13012.17542163407,,,ok,rollout+verify
+DeepSeek-V3,Grok-4,130585.07449657522,,,ok,rollout+verify
 Llama4-402B-A17B,DeepSeek-R1-Zero,45.69198114887346,,,ok,rollout+verify
 Llama4-402B-A17B,o1,137.0363224599946,,,ok,rollout+verify
 Llama4-402B-A17B,o3,1187.0560576005437,,,ok,rollout+verify

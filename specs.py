@@ -19,6 +19,22 @@ class ModelSpec:
     vocab: int              # Model vocabulary size
     name: str = ""                  # (optional) name of model being trained
     tied_embeddings: bool = False   # Tied embeddings mean a shared embedding/unembedding matrix. Reducing params
+    attention: str = "mha"          # "mha": multi-head attention, GQA/MQA when n_kv_heads < n_q_heads, caching
+                                    #   K and V per KV head. "mla": DeepSeek's multi-head latent attention.
+    # MLA (DeepSeek-V2/V3) caches one compressed latent per token per layer, plus a decoupled RoPE key
+    # shared across heads; per-head K and V are rebuilt from it. Decode runs it "absorbed" (scores and
+    # values taken against the latent: less memory traffic, more FLOPs); prefill and training run it
+    # "naive" (per-head K, V materialised: fewer FLOPs). Ignored unless attention == "mla".
+    kv_lora_rank: int = 0           # r_kv: latent width cached per token per layer (DeepSeek-V3: 512)
+    qk_rope_dim: int = 0            # D_r: decoupled RoPE key width, shared across heads (64)
+    qk_nope_dim: int = 0            # D_k: per-head key width rebuilt from the latent (128)
+    v_head_dim: int = 0             # D_v: per-head value width (128)
+
+    def __post_init__(self):
+        assert self.attention in ("mha", "mla"), f"unknown attention {self.attention!r}"
+        if self.attention == "mla":
+            assert min(self.kv_lora_rank, self.qk_rope_dim, self.qk_nope_dim, self.v_head_dim) > 0, \
+                "MLA needs kv_lora_rank, qk_rope_dim, qk_nope_dim and v_head_dim"
 
     @property
     def p_head(self) -> float:
@@ -32,9 +48,44 @@ class ModelSpec:
         return n * self.d_model * self.vocab
 
     @property
+    def attn_dim(self) -> float:
+        """Per-head score + value width in prefill and training: 2*head_dim, or D_k + D_r + D_v for
+        (naive) MLA."""
+        if self.attention == "mla":
+            return self.qk_nope_dim + self.qk_rope_dim + self.v_head_dim
+        return 2 * self.head_dim
+
+    @property
+    def attn_dim_decode(self) -> float:
+        """The same in decode: absorbed MLA scores and weights values against the r_kv-wide latent,
+        2*r_kv + D_r."""
+        if self.attention == "mla":
+            return 2 * self.kv_lora_rank + self.qk_rope_dim
+        return 2 * self.head_dim
+
+    @property
     def attn_coef(self) -> float:
-        """N*H*L -- the per-(query,key) attention FLOP coefficient, without the leading 2/4 coefficient"""
-        return self.n_q_heads * self.head_dim * self.n_layers
+        """L*H*attn_dim/2 (= N*H*L for MHA): the per-(query,key) attention FLOP coefficient for prefill
+        and training, without the leading 2/4 coefficient."""
+        return self.n_layers * self.n_q_heads * self.attn_dim / 2
+
+    @property
+    def attn_coef_decode(self) -> float:
+        """L*H*attn_dim_decode/2: the decode counterpart of attn_coef."""
+        return self.n_layers * self.n_q_heads * self.attn_dim_decode / 2
+
+    @property
+    def kv_elems_per_tok(self) -> float:
+        """KV-cache elements per token, all layers: 2*n_kv_heads*head_dim per layer, or r_kv + D_r for MLA."""
+        if self.attention == "mla":
+            return self.n_layers * (self.kv_lora_rank + self.qk_rope_dim)
+        return self.n_layers * 2 * self.n_kv_heads * self.head_dim
+
+    @property
+    def kv_head_shards(self) -> int:
+        """Ways tensor parallelism can split the KV cache by head. MLA's latent is shared by every head,
+        so it can only be split by sequence."""
+        return 1 if self.attention == "mla" else self.n_kv_heads
 
 
     def attn_significance_T(self, fraction: float = 0.20) -> float:

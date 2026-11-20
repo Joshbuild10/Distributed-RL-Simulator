@@ -15,7 +15,7 @@ ER_POINTS = (1_000, 10_000, 50_000, 100_000, 500_000)
 SENS_GPUS = 100_000
 H100_EQUIV = 16
 MSHORT = {"Llama3-8B": "L3-8B", "Llama3-70B": "L3-70B", "Llama3-405B": "L3-405B", "Qwen3-30B-A3B": "Q3-30B/A3",
-          "Qwen3-235B-A22B": "Q3-235B/A22", "Kimi-K3": "K3-2.4T", "Llama4-402B-A17B": "L4-402B/A17"}
+          "Qwen3-235B-A22B": "Q3-235B/A22", "Kimi-K3": "K3-2.4T", "Llama4-402B-A17B": "L4-402B/A17", "DeepSeek-V3": "DS-V3/A37"}
 
 
 def target_label(t):

@@ -50,3 +50,43 @@ def test_results_reproduce(name):
     with open(path, encoding="utf-8", newline="") as fh:
         assert fresh.replace("\r\n", "\n") == fh.read().replace("\r\n", "\n"), \
             f"{it.id} differs from results/: rebuild with python -m analysis build {name}"
+
+
+def test_result_cache_is_thread_safe(monkeypatch):
+    """The explorer flushes the result cache while other script threads are still filling it."""
+    import threading
+    from analysis import cache, sweep
+    import time
+    saved = []
+
+    def save(new):                               # walk the dict as pickling real results does, yielding
+        n = 0
+        for _ in new:
+            n += 1
+            time.sleep(0)
+        saved.append(n)
+    monkeypatch.setattr(cache, "save_results", save)
+    monkeypatch.setattr(sweep, "_cache", {})
+    monkeypatch.setattr(sweep, "_new", {})
+    errors = []
+
+    def fill(k):
+        try:
+            for i in range(20_000):
+                sweep.cached(lambda c, *a: c, f"{k}-{i}")
+        except Exception as e:                   # pragma: no cover - the failure being tested for
+            errors.append(e)
+
+    fillers = [threading.Thread(target=fill, args=(k,)) for k in range(4)]
+    for t in fillers:
+        t.start()
+    try:
+        while any(t.is_alive() for t in fillers):   # flush continuously while the others write
+            sweep.flush()
+    except Exception as e:                       # pragma: no cover
+        errors.append(e)
+    for t in fillers:
+        t.join()
+    sweep.flush()
+    assert not errors, errors[:1]
+    assert sum(saved) == 80_000

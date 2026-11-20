@@ -2,6 +2,7 @@ __pycache__/
 */__pycache__
 .claude/
 .cache/
+paper/
 output.txt
 model_output.txt
 *.txt

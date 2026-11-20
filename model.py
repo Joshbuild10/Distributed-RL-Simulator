@@ -289,7 +289,7 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     grp_bw, grp_flops = tp * bw_eff, tp * flops_eff   # pooled across the group
 
     # KV cache memory per token, and read/write volume over a sequence
-    kv_per_tok = a.b_kv * 2.0 * m.n_layers * m.n_kv_heads * m.head_dim
+    kv_per_tok = a.b_kv * m.kv_elems_per_tok
     vol_kv = kv_per_tok * (rl.prompt_len * rl.response_len_mean + rl.er2 / 2.0)
 
     # Calculates the number of concurrent sequences per node under continuous batching.
@@ -320,9 +320,9 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     # Compute for decode per response
     c_dec_layers = 2.0 * m.p_active * rl.response_len_mean
     # Sum the compute in the decode steps of attention over the growing context:
-    #   4 * N*H*L * sum_t (P + t)  = 4*N*H*L*(P*E[R] + E[R^2]/2)
+    #   4 * N*H*L * sum_t (P + t)  = 4*N*H*L*(P*E[R] + E[R^2]/2)   (absorbed width for MLA)
     if a.include_attention:
-        c_dec_attn = 4.0 * m.attn_coef * (rl.prompt_len * rl.response_len_mean + rl.er2 / 2.0)
+        c_dec_attn = 4.0 * m.attn_coef_decode * (rl.prompt_len * rl.response_len_mean + rl.er2 / 2.0)
     else:
         c_dec_attn = 0.0
     c_decode = c_dec_layers + c_dec_attn
@@ -346,9 +346,10 @@ def rollout_terms(s: Scenario) -> RolloutTerms:
     t_dec_mem = (mem_weights_decode * rl.response_len_mean) / grp_bw if bw_eff else float("inf")
     t_decode = max(t_dec_comp, t_dec_mem) # Overall decode step time
 
-    # KV shards over heads first (<= n_kv_heads) then over the batch, so tp keeps helping past the head
-    # count at the cost of per-layer AllToAlls (not modelled). Batch shards cap at sequences in flight.
-    kv_shard = min(tp, m.n_kv_heads * max(1.0, seqs_per_wave))
+    # KV shards over heads first (<= n_kv_heads; 1 for MLA's shared latent) then over the batch, so tp
+    # keeps helping past the head count at the cost of per-layer AllToAlls (not modelled). Batch shards
+    # cap at sequences in flight.
+    kv_shard = min(tp, m.kv_head_shards * max(1.0, seqs_per_wave))
     t_inf_attn = (vol_kv * seqs_per_wave) / (bw_eff * kv_shard) if bw_eff else float("inf")
     t_prefill = (c_prefill * seqs_per_wave) / grp_flops if seq_par else float("inf")
     t_env = v.t_env_per_rollout
